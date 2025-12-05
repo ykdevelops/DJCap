@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DjCap - Live Track Visualization</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+
+        .status.connected {
+            background: rgba(76, 175, 80, 0.9);
+            color: white;
+        }
+
+        .status.disconnected {
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .metadata-item {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .metadata-label {
+            font-size: 0.85em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .metadata-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .tags-section {
+            margin-top: 20px;
+        }
+
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .tag {
+            background: #667eea;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .tag.lastfm {
+            background: #d32f2f;
+        }
+
+        .tag.keyword {
+            background: #667eea;
+        }
+
+        .gifs-section {
+            margin-top: 20px;
+        }
+
+        .gifs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .gif-card {
+            background: #f5f5f5;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .gif-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        .gif-image {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .gif-title {
+            padding: 10px;
+            font-size: 0.9em;
+            color: #666;
+            text-align: center;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .empty-state-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+
+        .timestamp {
+            font-size: 0.85em;
+            color: #999;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .active-badge {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 0 10px;
+            border-radius: 25px;
+            background: #666;
+            color: white;
+            font-size: 1em;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .active-badge.active {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+            box-shadow: 0 0 15px rgba(76, 175, 80, 0.6);
+            font-weight: bold;
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="container">
+            <div class="header">
+                <h1>🎧 DjCap Live</h1>
+                <div :class="['status', isConnected ? 'connected' : 'disconnected']">
+                    {{ isConnected ? '● Connected' : '○ Disconnected' }}
+                </div>
+            </div>
+
+            <div class="main-content" v-if="enrichedData">
+                <!-- Metadata Card -->
+                <div class="card">
+                    <h2>📊 Track Info</h2>
+                    
+                    <!-- Active Deck Indicator -->
+                    <div style="margin-bottom: 20px; text-align: center;">
+                        <span :class="['active-badge', getDeckActive('deck1') ? 'active' : '']">
+                            Deck 1 {{ getDeckActive('deck1') ? '▶️ Playing' : '⏸️ Paused' }}
+                        </span>
+                        <span :class="['active-badge', getDeckActive('deck2') ? 'active' : '']">
+                            Deck 2 {{ getDeckActive('deck2') ? '▶️ Playing' : '⏸️ Paused' }}
+                        </span>
+                    </div>
+                    
+                    <div class="metadata-grid">
+                        <div class="metadata-item">
+                            <div class="metadata-label">Title</div>
+                            <div class="metadata-value">{{ enrichedData.metadata?.title || 'N/A' }}</div>
+                        </div>
+                        <div class="metadata-item">
+                            <div class="metadata-label">Artist</div>
+                            <div class="metadata-value">{{ enrichedData.metadata?.artist || 'N/A' }}</div>
+                        </div>
+                        <div class="metadata-item">
+                            <div class="metadata-label">BPM</div>
+                            <div class="metadata-value">{{ enrichedData.metadata?.bpm || 'N/A' }}</div>
+                        </div>
+                        <div class="metadata-item">
+                            <div class="metadata-label">Key</div>
+                            <div class="metadata-value">{{ enrichedData.metadata?.key || 'N/A' }}</div>
+                        </div>
+                    </div>
+
+                    <div class="tags-section" v-if="enrichedData.lastfm_tags && enrichedData.lastfm_tags.length > 0">
+                        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #d32f2f;">Last.fm Tags</h3>
+                        <div class="tags">
+                            <span v-for="tag in enrichedData.lastfm_tags" :key="tag" class="tag lastfm">
+                                {{ tag }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="tags-section" v-if="enrichedData.refined_keywords && enrichedData.refined_keywords.length > 0">
+                        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Keywords</h3>
+                        <div class="tags">
+                            <span v-for="keyword in enrichedData.refined_keywords" :key="keyword" class="tag keyword">
+                                {{ keyword }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="timestamp" v-if="enrichedData.timestamp">
+                        Last updated: {{ formatTimestamp(enrichedData.timestamp) }}
+                    </div>
+                </div>
+
+                <!-- GIFs Card -->
+                <div class="card">
+                    <h2>🎬 Visuals</h2>
+                    <div v-if="enrichedData.gifs && enrichedData.gifs.length > 0" class="gifs-section">
+                        <div class="gifs-grid">
+                            <div v-for="(gif, index) in enrichedData.gifs" :key="index" class="gif-card">
+                                <img :src="gif.images?.downsized?.url || gif.url || gif.images?.fixed_height?.url" 
+                                     :alt="gif.title || 'GIF'"
+                                     class="gif-image"
+                                     @error="handleImageError">
+                                <div class="gif-title">{{ gif.title || 'GIF' }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="empty-state">
+                        <div class="empty-state-icon">🎭</div>
+                        <p>No GIFs available yet. Waiting for track data...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div v-else class="card">
+                <div class="empty-state">
+                    <div class="empty-state-icon">⏳</div>
+                    <p>Waiting for track data...</p>
+                    <p style="margin-top: 10px; font-size: 0.9em;">Make sure djcap.py and djcap_processor.py are running.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    enrichedData: null,
+                    isConnected: false,
+                    pollInterval: null
+                };
+            },
+            mounted() {
+                this.fetchData();
+                // Poll every 2 seconds for updates
+                this.pollInterval = setInterval(() => {
+                    this.fetchData();
+                }, 2000);
+            },
+            beforeUnmount() {
+                if (this.pollInterval) {
+                    clearInterval(this.pollInterval);
+                }
+            },
+            methods: {
+                async fetchData() {
+                    try {
+                        const response = await fetch('/api/enriched');
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.enrichedData = data;
+                            this.isConnected = true;
+                        } else {
+                            this.isConnected = false;
+                        }
+                    } catch (error) {
+                        console.error('Error fetching data:', error);
+                        this.isConnected = false;
+                    }
+                },
+                formatTimestamp(timestamp) {
+                    if (!timestamp) return 'N/A';
+                    const date = new Date(timestamp);
+                    return date.toLocaleString();
+                },
+                handleImageError(event) {
+                    // Hide broken images
+                    event.target.style.display = 'none';
+                },
+                getDeckActive(deckName) {
+                    // Check if deck is active from the enriched data
+                    // First try to get from the raw data if available, otherwise use active_deck
+                    if (this.enrichedData && this.enrichedData.raw_data) {
+                        const deck = this.enrichedData.raw_data[deckName];
+                        if (deck && typeof deck.active === 'boolean') {
+                            return deck.active;
+                        }
+                    }
+                    // Fallback to active_deck field
+                    return this.enrichedData && this.enrichedData.active_deck === deckName;
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
+

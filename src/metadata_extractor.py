@@ -313,6 +313,93 @@ def _fix_numeric_ocr(text: str) -> str:
     return text
 
 
+def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[Dict] = None) -> str:
+    """
+    Detect which deck is active by checking if the play button is green.
+    
+    Args:
+        img_array: Full screenshot as numpy array (RGB)
+        coords: Optional coordinates dictionary from region_coordinates.json
+        
+    Returns:
+        "deck1" or "deck2" based on which has a green play button
+    """
+    # Green color range (RGB values for green play button in djay Pro)
+    # Adjust these based on actual green color - typically bright green
+    GREEN_MIN = np.array([0, 150, 0])    # Minimum green RGB (low red, medium-high green, low blue)
+    GREEN_MAX = np.array([100, 255, 100])  # Maximum green RGB
+    
+    # Get play button coordinates
+    if coords:
+        deck1_play = coords.get('deck1_play_button')
+        deck2_play = coords.get('deck2_play_button')
+    else:
+        # Fallback to default coordinates if not found
+        logger.warning("Play button coordinates not found, defaulting to deck1")
+        return "deck1"
+    
+    if not deck1_play or not deck2_play:
+        logger.warning("Play button coordinates incomplete, defaulting to deck1")
+        return "deck1"
+    
+    def check_play_button_for_green(play_button_bounds):
+        """Check if play button region contains green pixels."""
+        x_start, y_start, x_end, y_end = play_button_bounds
+        
+        # Ensure bounds are valid
+        height, width = img_array.shape[:2]
+        x_start = max(0, min(x_start, width - 1))
+        y_start = max(0, min(y_start, height - 1))
+        x_end = max(x_start + 1, min(x_end, width))
+        y_end = max(y_start + 1, min(y_end, height))
+        
+        if x_end <= x_start or y_end <= y_start:
+            return False
+        
+        # Extract play button region
+        play_button_region = img_array[y_start:y_end, x_start:x_end]
+        
+        if len(play_button_region.shape) != 3:
+            return False
+        
+        # Create mask for green pixels
+        green_mask = cv2.inRange(play_button_region, GREEN_MIN, GREEN_MAX)
+        green_pixel_count = np.sum(green_mask > 0)
+        total_pixels = play_button_region.shape[0] * play_button_region.shape[1]
+        
+        if total_pixels == 0:
+            return False
+        
+        green_ratio = green_pixel_count / total_pixels
+        
+        # If more than 15% of pixels are green, consider it active
+        # (adjust threshold based on testing)
+        is_green = green_ratio > 0.15
+        
+        logger.debug(f"Play button green ratio: {green_ratio:.2%}, active: {is_green}")
+        
+        return is_green
+    
+    deck1_active = check_play_button_for_green(deck1_play)
+    deck2_active = check_play_button_for_green(deck2_play)
+    
+    # Determine active deck
+    if deck1_active and not deck2_active:
+        logger.info("Detected active deck: deck1 (green play button)")
+        return "deck1"
+    elif deck2_active and not deck1_active:
+        logger.info("Detected active deck: deck2 (green play button)")
+        return "deck2"
+    elif deck1_active and deck2_active:
+        # Both playing - return the first one (or could handle "both" case)
+        logger.info("Both decks appear active, defaulting to deck1")
+        return "deck1"
+    else:
+        # Neither playing - default to deck1
+        logger.info("No active deck detected (no green play buttons), defaulting to deck1")
+        return "deck1"
+
+
 def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
     """
     Extract track metadata from djay Pro screenshot.
@@ -357,13 +444,17 @@ def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
     deck1_metadata = _extract_deck_metadata_regions(deck1_region, "deck1", coords)
     deck2_metadata = _extract_deck_metadata_regions(deck2_region, "deck2", coords)
     
-    # Determine active deck (for now, default to deck1, can be enhanced later)
-    active_deck = "deck1"
+    # Determine active deck by detecting green play button
+    active_deck = _detect_active_deck_by_play_button(img_array, coords)
+    
+    # Add active status to each deck
+    deck1_metadata["active"] = (active_deck == "deck1")
+    deck2_metadata["active"] = (active_deck == "deck2")
     
     logger.info(f"Extracted metadata - Deck1: Title={deck1_metadata.get('title')}, Artist={deck1_metadata.get('artist')}, "
-                f"BPM={deck1_metadata.get('bpm')}, Key={deck1_metadata.get('key')} | "
+                f"BPM={deck1_metadata.get('bpm')}, Key={deck1_metadata.get('key')}, Active={deck1_metadata.get('active')} | "
                 f"Deck2: Title={deck2_metadata.get('title')}, Artist={deck2_metadata.get('artist')}, "
-                f"BPM={deck2_metadata.get('bpm')}, Key={deck2_metadata.get('key')}")
+                f"BPM={deck2_metadata.get('bpm')}, Key={deck2_metadata.get('key')}, Active={deck2_metadata.get('active')}")
     
     return {
         "deck1": deck1_metadata,

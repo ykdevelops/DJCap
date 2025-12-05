@@ -295,18 +295,35 @@ def process_metadata_update(file_path: str):
     logger.info("Processing metadata update...")
     
     # Extract active deck metadata
-    active_deck = data.get('active_deck', 'deck1')
+    # First check which deck has active=true, fallback to active_deck field
+    deck1_active = data.get('deck1', {}).get('active', False)
+    deck2_active = data.get('deck2', {}).get('active', False)
+    
+    if deck1_active:
+        active_deck = 'deck1'
+    elif deck2_active:
+        active_deck = 'deck2'
+    else:
+        # Fallback to active_deck field if active attribute not set
+        active_deck = data.get('active_deck', 'deck1')
+    
     metadata = extract_active_deck_metadata(data)
     
     if not metadata:
         logger.warning("Could not extract active deck metadata")
         return
     
-    logger.info(f"Active deck: {active_deck}, Metadata: {metadata}")
+    logger.info(f"Active deck: {active_deck} (deck1.active={deck1_active}, deck2.active={deck2_active}), Metadata: {metadata}")
     
     # Enrich metadata
     enriched = enrich_metadata(metadata)
     enriched['active_deck'] = active_deck
+    
+    # Include raw deck data with active status for frontend
+    enriched['raw_data'] = {
+        'deck1': data.get('deck1', {}),
+        'deck2': data.get('deck2', {})
+    }
     
     # Save enriched JSON
     save_enriched_json(enriched, ENRICHED_JSON_FILE)

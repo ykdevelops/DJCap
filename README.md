@@ -225,6 +225,36 @@ The following are automatically ignored by Git:
 - `data/output/` folder (contains generated JSON files)
 - Temporary files and Python cache
 
+## Frontend Visualization
+
+A Vue.js frontend is available to visualize the enriched metadata and GIFs in real-time.
+
+### Running the Frontend
+
+1. Start the frontend server:
+```bash
+python frontend/server.py
+```
+
+2. Open your browser and navigate to:
+```
+http://localhost:8080
+```
+
+The frontend will:
+- Display current track metadata (title, artist, BPM, key)
+- Show Last.fm tags and refined keywords
+- Display GIFs fetched based on the keywords
+- Auto-refresh every 2 seconds to show live updates
+
+### Frontend Features
+
+- **Real-time Updates**: Automatically polls for new data every 2 seconds
+- **Track Information**: Shows title, artist, BPM, and key
+- **Tags & Keywords**: Displays Last.fm tags and refined keywords
+- **GIF Gallery**: Shows all GIFs fetched for the current track
+- **Responsive Design**: Works on desktop and mobile devices
+
 ## License
 
 This project uses code adapted from AudioApis for window capture functionality.
