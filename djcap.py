@@ -10,8 +10,8 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
-from window_capture import capture_djay_window, DjayProWindowNotFoundError
-from metadata_extractor import extract_metadata
+from src.window_capture import capture_djay_window, DjayProWindowNotFoundError
+from src.metadata_extractor import extract_metadata
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 UPDATE_INTERVAL = 3  # seconds between updates
-OUTPUT_FILE = "djcap_output.json"  # JSON file for other applications to read
+OUTPUT_FILE = "data/output/djcap_output.json"  # JSON file for other applications to read
 RUNNING = True
 
 

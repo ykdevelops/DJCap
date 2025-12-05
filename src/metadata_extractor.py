@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 REGION_PADDING = 15  # pixels
 
 # Path to region coordinates file
-REGION_COORDINATES_FILE = "region_coordinates.json"
+REGION_COORDINATES_FILE = "data/region_coordinates.json"
 
 # Color thresholds for text detection
 # White text: high brightness (RGB values close to 255)

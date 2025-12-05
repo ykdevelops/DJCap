@@ -7,7 +7,10 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from window_capture import capture_djay_window, DjayProWindowNotFoundError
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.window_capture import capture_djay_window, DjayProWindowNotFoundError
 
 class RegionDefiner:
     def __init__(self, screenshot):
@@ -538,7 +541,7 @@ class RegionDefiner:
                 }
         
         # Save to file
-        output_file = 'region_coordinates.json'
+        output_file = 'data/region_coordinates.json'
         with open(output_file, 'w') as f:
             json.dump(output_data, f, indent=2)
         print(f"\n✅ Coordinates saved to: {output_file}")

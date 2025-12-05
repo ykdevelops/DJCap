@@ -4,13 +4,16 @@ import numpy as np
 import json
 import os
 from PIL import Image
-from window_capture import capture_djay_window, DjayProWindowNotFoundError
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.window_capture import capture_djay_window, DjayProWindowNotFoundError
 
 # Region padding (same as in metadata_extractor)
 REGION_PADDING = 15
 
 # Path to region coordinates file
-REGION_COORDINATES_FILE = "region_coordinates.json"
+REGION_COORDINATES_FILE = "data/region_coordinates.json"
 
 def _load_region_coordinates():
     """Load region coordinates from JSON file if it exists."""

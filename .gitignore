@@ -37,15 +37,40 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Project specific
-djcap_output.json
+# Project specific - Generated data (should not be committed)
+data/output/
 *.log
-debug_*.png
+
+# Debug folder - Contains test images and scripts
+debug/
+
+# Image files - All PNG images should be ignored
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Generated screenshots and captures
 test_*.png
+debug_*.png
 *_test_*.png
 combined_*.png
 dynamic_*.png
 text_region_*.png
+deck*.png
+capture_*.png
+screenshot_*.png
+
+# Environment variables
+.env
 
 # Temporary files
 *.tmp

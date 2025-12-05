@@ -29,9 +29,31 @@ pip install -r requirements.txt
    - Add Terminal (or your terminal app) and enable it
    - This allows the script to detect the djay Pro window
 
+## Project Structure
+
+```
+DjCap/
+├── src/                    # Core modules
+│   ├── window_capture.py   # Window capture functionality
+│   ├── metadata_extractor.py  # OCR and metadata extraction
+│   └── config.py           # Configuration and API keys
+├── tools/                  # Utility scripts
+│   ├── define_regions.py   # Interactive region definition tool
+│   └── save_all_regions.py # Save region screenshots
+├── debug/                  # Debug scripts and test images
+├── data/                   # Data files
+│   ├── region_coordinates.json  # OCR region coordinates
+│   └── output/            # Output JSON files
+│       ├── djcap_output.json
+│       └── djcap_enriched.json
+├── djcap.py               # Main capture service
+├── djcap_processor.py     # Metadata enrichment service
+└── requirements.txt       # Python dependencies
+```
+
 ## Usage
 
-Run the main script:
+Run the main capture script:
 
 ```bash
 python djcap.py
@@ -40,13 +62,13 @@ python djcap.py
 The script will:
 - Continuously capture the djay Pro window every 3 seconds
 - Extract metadata from both decks
-- Save results to `djcap_output.json`
+- Save results to `data/output/djcap_output.json`
 
 Press `Ctrl+C` to stop.
 
 ## Output Format
 
-The JSON file (`djcap_output.json`) contains:
+The JSON file (`data/output/djcap_output.json`) contains:
 
 ```json
 {
@@ -70,6 +92,66 @@ The JSON file (`djcap_output.json`) contains:
 }
 ```
 
+## Metadata Processor (djcap_processor.py)
+
+The metadata processor service watches `djcap_output.json` for changes and enriches the metadata with:
+
+- **Last.fm tags**: Fetches genre, mood, and context tags for tracks
+- **Keyword analysis**: Analyzes and selects the best keywords from metadata and tags
+- **GIF search**: Fetches relevant GIFs based on refined keywords
+
+### Setup
+
+1. Configure API keys (create `.env` file or set environment variables):
+```bash
+LASTFM_API_KEY=your_lastfm_api_key
+GIPHY_API_KEY=your_giphy_api_key
+```
+
+Alternatively, the processor will try to use API keys from AudioApis if available.
+
+2. Run the processor:
+```bash
+python djcap_processor.py
+```
+
+The processor will:
+- Monitor `data/output/djcap_output.json` for changes
+- Extract metadata from the active deck
+- Enrich with Last.fm tags, keywords, and GIFs
+- Save enriched results to `data/output/djcap_enriched.json`
+
+### Enriched Output Format
+
+The enriched JSON file (`data/output/djcap_enriched.json`) contains:
+
+```json
+{
+  "active_deck": "deck1",
+  "metadata": {
+    "title": "Song Title",
+    "artist": "Artist Name",
+    "bpm": 128,
+    "key": "1A"
+  },
+  "lastfm_tags": ["electronic", "dance", "energetic"],
+  "refined_keywords": ["electronic", "dance"],
+  "keyword_scores": {
+    "electronic": 0.95,
+    "dance": 0.88
+  },
+  "gifs": [
+    {
+      "url": "https://...",
+      "title": "...",
+      ...
+    }
+  ],
+  "timestamp": "2024-12-04T20:30:45.123456",
+  "last_updated": 1701724245.123456
+}
+```
+
 ## File Watching
 
 Other applications can watch the JSON file for changes using:
@@ -86,7 +168,12 @@ The file is written atomically (via temp file + rename) to prevent reading parti
 Edit `djcap.py` to change:
 
 - `UPDATE_INTERVAL`: Seconds between updates (default: 3)
-- `OUTPUT_FILE`: Path to JSON output file (default: "djcap_output.json")
+- `OUTPUT_FILE`: Path to JSON output file (default: "data/output/djcap_output.json")
+
+Edit `djcap_processor.py` to change:
+
+- `DJCAP_JSON_FILE`: Path to input JSON file (default: "data/output/djcap_output.json")
+- `ENRICHED_JSON_FILE`: Path to enriched output file (default: "data/output/djcap_enriched.json")
 
 ## Troubleshooting
 
@@ -103,6 +190,40 @@ Edit `djcap.py` to change:
 - Ensure djay Pro window is visible (not minimized)
 - Check that the window size is reasonable (not too small)
 - The coordinates are calibrated for standard djay Pro layouts
+
+## Maintenance
+
+### Cleaning Up Generated Data
+
+The project generates various temporary files (debug images, output JSONs, etc.) that should not be committed to Git. Run the cleanup script regularly to remove unnecessary files:
+
+**Using Python (recommended):**
+```bash
+python cleanup.py
+```
+
+**Using Bash:**
+```bash
+./cleanup.sh
+```
+
+This will remove:
+- All PNG/JPG images from `debug/` folder
+- Temporary files (`.tmp`, `.bak`, `.swp`, `*~`)
+- Python cache files (`__pycache__/`, `*.pyc`, `*.pyo`)
+- Any images in the root directory
+
+**Note:** Output JSON files in `data/output/` are NOT removed by default as they are needed for the application to function. If you want to remove them, do so manually.
+
+**Recommendation:** Run cleanup regularly (e.g., weekly) or before committing to Git to keep the repository clean.
+
+### Git Ignore
+
+The following are automatically ignored by Git:
+- All image files (`.png`, `.jpg`, `.jpeg`, etc.)
+- `debug/` folder (contains test images and debug scripts)
+- `data/output/` folder (contains generated JSON files)
+- Temporary files and Python cache
 
 ## License
 
