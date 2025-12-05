@@ -39,6 +39,8 @@ Thumbs.db
 
 # Project specific - Generated data (should not be committed)
 data/output/
+djcap_output.json
+djcap_enriched.json
 *.log
 
 # Debug folder - Contains test images and scripts
