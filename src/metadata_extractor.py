@@ -313,7 +313,7 @@ def _fix_numeric_ocr(text: str) -> str:
     return text
 
 
-def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[Dict] = None) -> str:
+def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[Dict] = None) -> Tuple[str, bool, bool]:
     """
     Detect which deck is active by checking if the play button is green.
     
@@ -322,12 +322,22 @@ def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[D
         coords: Optional coordinates dictionary from region_coordinates.json
         
     Returns:
-        "deck1" or "deck2" based on which has a green play button
+        Tuple of (primary_active_deck, deck1_is_active, deck2_is_active)
+        - primary_active_deck: "deck1" or "deck2" (for backward compatibility)
+        - deck1_is_active: True if deck1 play button is green
+        - deck2_is_active: True if deck2 play button is green
     """
     # Green color range (RGB values for green play button in djay Pro)
-    # Adjust these based on actual green color - typically bright green
-    GREEN_MIN = np.array([0, 150, 0])    # Minimum green RGB (low red, medium-high green, low blue)
-    GREEN_MAX = np.array([100, 255, 100])  # Maximum green RGB
+    # Based on actual analysis: green pixels have avg RGB ~(110, 173, 106)
+    # Green channel is significantly higher (60+ points) than red/blue when active
+    # Method 1: Standard green (matches actual djay Pro green)
+    # Stricter range to avoid false positives from gray pixels
+    GREEN_MIN = np.array([50, 120, 50])    # Minimum RGB - green must be bright
+    GREEN_MAX = np.array([120, 255, 120])  # Maximum RGB - green dominant
+    
+    # Method 2: Bright green (very saturated)
+    BRIGHT_GREEN_MIN = np.array([80, 160, 80])
+    BRIGHT_GREEN_MAX = np.array([120, 255, 120])
     
     # Get play button coordinates
     if coords:
@@ -342,7 +352,7 @@ def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[D
         logger.warning("Play button coordinates incomplete, defaulting to deck1")
         return "deck1"
     
-    def check_play_button_for_green(play_button_bounds):
+    def check_play_button_for_green(play_button_bounds, deck_name):
         """Check if play button region contains green pixels."""
         x_start, y_start, x_end, y_end = play_button_bounds
         
@@ -354,50 +364,134 @@ def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[D
         y_end = max(y_start + 1, min(y_end, height))
         
         if x_end <= x_start or y_end <= y_start:
+            logger.warning(f"{deck_name}: Invalid play button bounds: ({x_start}, {y_start}, {x_end}, {y_end})")
             return False
         
         # Extract play button region
         play_button_region = img_array[y_start:y_end, x_start:x_end]
         
         if len(play_button_region.shape) != 3:
+            logger.warning(f"{deck_name}: Play button region is not RGB (shape: {play_button_region.shape})")
             return False
         
-        # Create mask for green pixels
-        green_mask = cv2.inRange(play_button_region, GREEN_MIN, GREEN_MAX)
-        green_pixel_count = np.sum(green_mask > 0)
+        # Simple and accurate detection: check if green is significantly dominant
         total_pixels = play_button_region.shape[0] * play_button_region.shape[1]
         
         if total_pixels == 0:
+            logger.warning(f"{deck_name}: Play button region has zero pixels")
             return False
         
-        green_ratio = green_pixel_count / total_pixels
+        green_channel = play_button_region[:, :, 1]  # Green channel
+        red_channel = play_button_region[:, :, 0]     # Red channel
+        blue_channel = play_button_region[:, :, 2]    # Blue channel
         
-        # If more than 15% of pixels are green, consider it active
-        # (adjust threshold based on testing)
-        is_green = green_ratio > 0.15
+        # Method 1: Color range detection (for pixels that match green button color)
+        green_mask1 = cv2.inRange(play_button_region, GREEN_MIN, GREEN_MAX)
+        green_count1 = np.sum(green_mask1 > 0)
+        green_ratio1 = green_count1 / total_pixels
         
-        logger.debug(f"Play button green ratio: {green_ratio:.2%}, active: {is_green}")
+        # Method 2: Bright green range
+        green_mask2 = cv2.inRange(play_button_region, BRIGHT_GREEN_MIN, BRIGHT_GREEN_MAX)
+        green_count2 = np.sum(green_mask2 > 0)
+        green_ratio2 = green_count2 / total_pixels
+        
+        # Method 3: Channel-based - green is significantly higher than red/blue
+        # Based on actual analysis: when green, green is 55-65 points higher than red/blue
+        # Green should be bright (> 100) and significantly higher than red/blue
+        # Exclude gray/white pixels where all channels are similar
+        green_dominant = (
+            (green_channel > red_channel + 55) & 
+            (green_channel > blue_channel + 55) & 
+            (green_channel > 100) &
+            # Exclude pixels where red and blue are too close (gray/white)
+            (abs(red_channel - blue_channel) < 30)
+        )
+        green_dominant_count = np.sum(green_dominant)
+        green_dominant_ratio = green_dominant_count / total_pixels
+        
+        # Average channel values for relative comparison
+        avg_green = np.mean(green_channel)
+        avg_red = np.mean(red_channel)
+        avg_blue = np.mean(blue_channel)
+        green_advantage = avg_green - max(avg_red, avg_blue)
+        
+        # Active if:
+        # 1. Green-dominant pixels > 3% (green is 55+ points higher, green > 100, red≈blue), OR
+        # 2. Green advantage is 50+ points AND green is bright (> 100)
+        # This should catch actual green buttons (like Deck 2: green=175, red=113, blue=108)
+        is_green = (green_dominant_ratio > 0.03) or (green_advantage > 50 and avg_green > 100)
+        
+        logger.info(f"{deck_name} play button - Green pixels: {green_count1}/{total_pixels} ({green_ratio1:.2%}), "
+                   f"Bright: {green_count2}/{total_pixels} ({green_ratio2:.2%}), "
+                   f"Dominant: {green_dominant_count}/{total_pixels} ({green_dominant_ratio:.2%}), "
+                   f"Green advantage: {green_advantage:.1f}, Active: {is_green}")
         
         return is_green
     
-    deck1_active = check_play_button_for_green(deck1_play)
-    deck2_active = check_play_button_for_green(deck2_play)
+    # Get green ratios for both decks for relative comparison
+    def get_green_ratio(play_button_bounds):
+        """Get green ratio for a play button without threshold check."""
+        x_start, y_start, x_end, y_end = play_button_bounds
+        height, width = img_array.shape[:2]
+        x_start = max(0, min(x_start, width - 1))
+        y_start = max(0, min(y_start, height - 1))
+        x_end = max(x_start + 1, min(x_end, width))
+        y_end = max(y_start + 1, min(y_end, height))
+        
+        if x_end <= x_start or y_end <= y_start:
+            return 0.0
+        
+        play_button_region = img_array[y_start:y_end, x_start:x_end]
+        if len(play_button_region.shape) != 3:
+            return 0.0
+        
+        total_pixels = play_button_region.shape[0] * play_button_region.shape[1]
+        if total_pixels == 0:
+            return 0.0
+        
+        green_mask1 = cv2.inRange(play_button_region, GREEN_MIN, GREEN_MAX)
+        green_mask2 = cv2.inRange(play_button_region, BRIGHT_GREEN_MIN, BRIGHT_GREEN_MAX)
+        
+        green_channel = play_button_region[:, :, 1]
+        red_channel = play_button_region[:, :, 0]
+        blue_channel = play_button_region[:, :, 2]
+        green_dominant = (green_channel > red_channel + 50) & (green_channel > blue_channel + 50) & (green_channel > 60)
+        
+        max_ratio = max(
+            np.sum(green_mask1 > 0) / total_pixels,
+            np.sum(green_mask2 > 0) / total_pixels,
+            np.sum(green_dominant) / total_pixels
+        )
+        return max_ratio
     
-    # Determine active deck
-    if deck1_active and not deck2_active:
+    deck1_ratio = get_green_ratio(deck1_play)
+    deck2_ratio = get_green_ratio(deck2_play)
+    
+    deck1_active = check_play_button_for_green(deck1_play, "Deck1")
+    deck2_active = check_play_button_for_green(deck2_play, "Deck2")
+    
+    # Determine primary active deck for backward compatibility (used for active_deck field)
+    if deck1_active and deck2_active:
+        # Both playing - return the one with more green as primary
+        if deck2_ratio > deck1_ratio:
+            primary_deck = "deck2"
+            logger.info(f"Both decks active! Deck2 has more green ({deck2_ratio:.2%} vs {deck1_ratio:.2%}), using as primary")
+        else:
+            primary_deck = "deck1"
+            logger.info(f"Both decks active! Deck1 has more green ({deck1_ratio:.2%} vs {deck2_ratio:.2%}), using as primary")
+    elif deck1_active:
+        primary_deck = "deck1"
         logger.info("Detected active deck: deck1 (green play button)")
-        return "deck1"
-    elif deck2_active and not deck1_active:
+    elif deck2_active:
+        primary_deck = "deck2"
         logger.info("Detected active deck: deck2 (green play button)")
-        return "deck2"
-    elif deck1_active and deck2_active:
-        # Both playing - return the first one (or could handle "both" case)
-        logger.info("Both decks appear active, defaulting to deck1")
-        return "deck1"
     else:
         # Neither playing - default to deck1
+        primary_deck = "deck1"
         logger.info("No active deck detected (no green play buttons), defaulting to deck1")
-        return "deck1"
+    
+    # Return primary deck and individual active states (both can be true)
+    return (primary_deck, deck1_active, deck2_active)
 
 
 def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
@@ -445,11 +539,13 @@ def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
     deck2_metadata = _extract_deck_metadata_regions(deck2_region, "deck2", coords)
     
     # Determine active deck by detecting green play button
-    active_deck = _detect_active_deck_by_play_button(img_array, coords)
+    # Returns: (primary_active_deck, deck1_is_active, deck2_is_active)
+    active_deck, deck1_is_active, deck2_is_active = _detect_active_deck_by_play_button(img_array, coords)
     
-    # Add active status to each deck
-    deck1_metadata["active"] = (active_deck == "deck1")
-    deck2_metadata["active"] = (active_deck == "deck2")
+    # Add active status to each deck (both can be true if both are playing)
+    # Convert to Python bool to ensure JSON serialization works
+    deck1_metadata["active"] = bool(deck1_is_active)
+    deck2_metadata["active"] = bool(deck2_is_active)
     
     logger.info(f"Extracted metadata - Deck1: Title={deck1_metadata.get('title')}, Artist={deck1_metadata.get('artist')}, "
                 f"BPM={deck1_metadata.get('bpm')}, Key={deck1_metadata.get('key')}, Active={deck1_metadata.get('active')} | "
