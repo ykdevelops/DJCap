@@ -33,7 +33,7 @@ The frontend will automatically connect and start displaying data.
 - **server.py**: Simple HTTP server that:
   - Serves the frontend HTML/CSS/JS
   - Provides `/api/enriched` endpoint for JSON data
-  - Reads from `data/output/djcap_enriched.json`
+  - Reads from `data/output/djcap_output.json` (single source of truth)
 
 ## API Endpoint
 

@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import os
+import re
 
 # Add AudioApis to Python path
 AUDIOAPIS_PATH = '/Users/youssefkhalil/AudioApis'
@@ -38,6 +39,19 @@ except ImportError as e:
     logging.warning(f"AudioApis metadata modules not available: {e}")
 
 from src.config import LASTFM_API_KEY, GIPHY_API_KEY
+from src.key_translator import translate_key_to_characteristics
+from src.gif_bank import get_offline_gifs
+
+# Configuration: Set to False to skip API calls entirely (faster, no external dependencies)
+USE_LASTFM_API = False  # Set to False to skip Last.fm API calls
+USE_GIPHY_API = True   # Enable live Giphy API calls for GIF fetching
+USE_KEYWORD_ANALYZER = False  # Set to False to skip keyword analyzer (use basic keywords: title, artist, key characteristics)
+
+# Offline / fallback GIF support
+USE_OFFLINE_GIF_BANK = True  # Use offline GIF bank when Giphy is disabled or returns no results
+
+# Giphy API configuration
+GIPHY_GIFS_PER_TRACK = 100  # Maximum GIFs to fetch per track (Giphy API allows up to 100 per call)
 
 # Configure logging
 logging.basicConfig(
@@ -48,13 +62,15 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 DJCAP_JSON_FILE = "/Users/youssefkhalil/DjCap/data/output/djcap_output.json"
-ENRICHED_JSON_FILE = "/Users/youssefkhalil/DjCap/data/output/djcap_enriched.json"
 DEBOUNCE_DELAY = 0.1  # seconds to wait after file change before processing
 RUNNING = True
 
 # Track last processed file to avoid duplicates
 _last_processed_time = 0
 _last_processed_content = None
+_last_active_deck = None  # Track which deck was active last time
+_last_deck1_active = None  # Track deck1 active status
+_last_deck2_active = None  # Track deck2 active status
 
 
 def signal_handler(sig, frame):
@@ -115,152 +131,165 @@ def read_djcap_json(file_path: str, max_retries: int = 5, retry_delay: float = 0
     return None
 
 
-def extract_active_deck_metadata(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract metadata from the active deck.
+    Enrich a single deck's data with keywords, tags, and GIFs.
+    Only enriches if deck is active.
     
     Args:
-        data: Full JSON data from djcap_output.json
+        deck_data: Dictionary with deck metadata (title, artist, bpm, key, active)
         
     Returns:
-        Dictionary with title, artist, bpm, key or None if active deck not found
+        Enriched deck data with additional fields (or basic data if inactive)
     """
-    active_deck = data.get('active_deck')
-    if not active_deck:
-        logger.warning("No active_deck specified in JSON")
-        return None
+    if not deck_data.get('active', False):
+        # If deck is not active, return only basic metadata
+        return {
+            'deck': deck_data.get('deck'),
+            'title': deck_data.get('title'),
+            'artist': deck_data.get('artist'),
+            'bpm': deck_data.get('bpm'),
+            'key': deck_data.get('key'),
+            'active': False
+        }
     
-    deck_data = data.get(active_deck)
-    if not deck_data:
-        logger.warning(f"Active deck '{active_deck}' not found in JSON")
-        return None
+    title = deck_data.get('title')
+    artist = deck_data.get('artist')
+    bpm = deck_data.get('bpm')
+    key = deck_data.get('key')
     
-    metadata = {
-        'title': deck_data.get('title'),
-        'artist': deck_data.get('artist'),
-        'bpm': deck_data.get('bpm'),
-        'key': deck_data.get('key')
-    }
+    logger.info(f"Enriching active deck: {title} - {artist}")
     
-    return metadata
-
-
-def enrich_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Enrich metadata with Last.fm tags, keywords, and GIFs.
+    # Build keyword collection
+    keyword_collection = []
+    key_characteristics = []
     
-    Args:
-        metadata: Dictionary with title, artist, bpm, key
-        
-    Returns:
-        Enriched metadata dictionary
-    """
-    title = metadata.get('title')
-    artist = metadata.get('artist')
-    bpm = metadata.get('bpm')
-    key = metadata.get('key')
+    if title:
+        keyword_collection.append(title)
+    if artist:
+        keyword_collection.append(artist)
+    if key:
+        key_characteristics = translate_key_to_characteristics(key)
+        keyword_collection.extend(key_characteristics)
+        logger.info(f"Translated key '{key}' to characteristics: {key_characteristics}")
     
-    enriched = {
-        'metadata': metadata.copy(),
-        'lastfm_tags': [],
-        'refined_keywords': [],
-        'keyword_scores': {},
-        'gifs': []
-    }
-    
-    # Get Last.fm tags
-    if METADATA_MODULES_AVAILABLE and LASTFM_API_KEY and artist and title:
+    # Get Last.fm tags (optional - skip if disabled or no API key)
+    lastfm_tags = []
+    if USE_LASTFM_API and METADATA_MODULES_AVAILABLE and LASTFM_API_KEY and artist and title:
         try:
             logger.info(f"Fetching Last.fm tags for: {artist} - {title}")
             lastfm_tags = get_lastfm_tags(artist, title)
-            enriched['lastfm_tags'] = lastfm_tags
             logger.info(f"Got {len(lastfm_tags)} Last.fm tags: {lastfm_tags}")
         except Exception as e:
-            logger.error(f"Error fetching Last.fm tags: {e}", exc_info=True)
+            logger.warning(f"Error fetching Last.fm tags (skipping): {e}")
     else:
-        if not METADATA_MODULES_AVAILABLE:
-            logger.warning("Metadata modules not available, skipping Last.fm")
-        elif not LASTFM_API_KEY:
-            logger.warning("Last.fm API key not configured")
-        elif not artist or not title:
-            logger.warning("Missing artist or title for Last.fm lookup")
+        logger.debug("Skipping Last.fm tags (disabled or no API key)")
     
-    # Analyze keywords
-    if METADATA_MODULES_AVAILABLE:
+    # Analyze keywords (optional - use basic keywords if disabled or analyzer not available)
+    refined_keywords = keyword_collection  # Start with title, artist, key characteristics
+    keyword_scores = {}
+    if USE_KEYWORD_ANALYZER and METADATA_MODULES_AVAILABLE:
         try:
-            ocr_metadata = {
-                'title': title,
-                'artist': artist,
-                'bpm': bpm,
-                'key': key
-            }
+            ocr_metadata = {'title': title, 'artist': artist, 'bpm': bpm, 'key': key}
             logger.info("Analyzing keywords...")
-            result = analyze_keywords(
-                ocr_metadata=ocr_metadata,
-                lastfm_tags=enriched['lastfm_tags'],
-                bpm=bpm,
-                key=key
-            )
-            # analyze_keywords returns a tuple: (keywords, scores)
+            result = analyze_keywords(ocr_metadata=ocr_metadata, lastfm_tags=lastfm_tags, bpm=bpm, key=key)
             if isinstance(result, tuple) and len(result) == 2:
                 keywords, scores = result
-            else:
-                # Fallback if return format is different
-                keywords = result if isinstance(result, list) else []
-                scores = {}
-            enriched['refined_keywords'] = keywords
-            enriched['keyword_scores'] = scores
-            logger.info(f"Selected keywords: {keywords} (scores: {scores})")
+                refined_keywords = list(set(keyword_collection + keywords))
+                keyword_scores = scores
+            logger.info(f"Final keywords: {refined_keywords}")
         except Exception as e:
-            logger.error(f"Error analyzing keywords: {e}", exc_info=True)
+            logger.warning(f"Error analyzing keywords (using basic keywords): {e}")
+            # Use basic keyword collection if analyzer fails
+            refined_keywords = keyword_collection
     else:
-        logger.warning("Metadata modules not available, skipping keyword analysis")
+        logger.debug("Using basic keywords (title, artist, key characteristics) - no API calls")
     
-    # Fetch GIFs
-    if METADATA_MODULES_AVAILABLE and GIPHY_API_KEY and enriched['refined_keywords']:
+    # Build search keywords once – used by both online Giphy and offline bank
+    search_keywords: List[str] = []
+
+    # 1) Prefer artist – usually broad and reliable
+    if artist:
+        search_keywords.append(artist)
+
+    # 2) Clean up title (remove feat/parentheses) so it's not overly specific
+    if title:
+        cleaned_title = title
+        # Remove parenthetical parts, e.g. "(feat. Bruno Mars)", "(Radio Edit)"
+        cleaned_title = re.sub(r"\s*\([^)]*\)", "", cleaned_title)
+        # Remove 'feat.' or 'ft.' segments
+        cleaned_title = re.sub(r"\s+feat\.?.*$", "", cleaned_title, flags=re.IGNORECASE)
+        cleaned_title = re.sub(r"\s+ft\.?.*$", "", cleaned_title, flags=re.IGNORECASE)
+        cleaned_title = cleaned_title.strip()
+        if cleaned_title and cleaned_title not in search_keywords:
+            search_keywords.append(cleaned_title)
+
+    # 3) Add up to two key characteristics (e.g. mood descriptors)
+    if key_characteristics:
+        for kc in key_characteristics[:2]:
+            if kc not in search_keywords:
+                search_keywords.append(kc)
+
+    # 4) Fallback to refined_keywords if we somehow have nothing
+    if not search_keywords:
+        search_keywords = refined_keywords
+
+    # Limit number of keywords to avoid too many API calls
+    search_keywords = search_keywords[:3]
+
+    # Distribute total GIF budget across keywords (e.g. 100 total)
+    per_keyword_limit = max(1, min(10, GIPHY_GIFS_PER_TRACK // max(1, len(search_keywords))))
+
+    gifs = []
+
+    # Primary: live Giphy API (if enabled)
+    if USE_GIPHY_API and METADATA_MODULES_AVAILABLE and GIPHY_API_KEY and refined_keywords:
         try:
-            logger.info(f"Fetching GIFs for keywords: {enriched['refined_keywords']}")
-            gifs = fetch_gifs_for_keywords(enriched['refined_keywords'], limit_per_keyword=1)
-            enriched['gifs'] = gifs
-            logger.info(f"Fetched {len(gifs)} GIFs")
+            logger.info(f"Fetching GIFs from Giphy for keywords: {search_keywords} (limit_per_keyword={per_keyword_limit})")
+            gifs = fetch_gifs_for_keywords(search_keywords, limit_per_keyword=per_keyword_limit)
+
+            # Remove duplicates based on GIF ID / URL
+            seen_ids = set()
+            unique_gifs = []
+            for gif in gifs:
+                gif_id = gif.get('id') or gif.get('url', '')
+                if gif_id and gif_id not in seen_ids:
+                    seen_ids.add(gif_id)
+                    unique_gifs.append(gif)
+                elif not gif_id:
+                    unique_gifs.append(gif)
+            gifs = unique_gifs
+
+            # Limit to max allowed
+            gifs = gifs[:GIPHY_GIFS_PER_TRACK]
+            logger.info(f"Giphy API: fetched {len(gifs)} GIFs for track (cycling at 1 per second = {len(gifs)} seconds)")
+            if gifs:
+                first = gifs[0]
+                logger.info(f"Giphy API: first GIF sample id={first.get('id')}, url={first.get('url')}")
         except Exception as e:
-            logger.error(f"Error fetching GIFs: {e}", exc_info=True)
+            logger.warning(f"Error fetching GIFs from Giphy (will try offline bank if enabled): {e}", exc_info=True)
     else:
-        if not METADATA_MODULES_AVAILABLE:
-            logger.warning("Metadata modules not available, skipping GIF fetch")
-        elif not GIPHY_API_KEY:
-            logger.warning("Giphy API key not configured")
-        elif not enriched['refined_keywords']:
-            logger.warning("No keywords available for GIF search")
+        logger.debug("Skipping live Giphy API (disabled or no API key)")
+
+    # Fallback / offline mode: use GIF bank if enabled and we still have no GIFs
+    if USE_OFFLINE_GIF_BANK and not gifs:
+        logger.info(f"Using offline GIF bank for keywords: {search_keywords}")
+        gifs = get_offline_gifs(search_keywords, limit=GIPHY_GIFS_PER_TRACK)
+        logger.info(f"Offline GIF bank: returned {len(gifs)} GIFs")
     
-    return enriched
+    # Add enriched fields to deck data
+    enriched_deck = deck_data.copy()
+    enriched_deck['lastfm_tags'] = lastfm_tags
+    enriched_deck['refined_keywords'] = refined_keywords
+    enriched_deck['keyword_scores'] = keyword_scores
+    enriched_deck['key_characteristics'] = key_characteristics
+    enriched_deck['gifs'] = gifs
+    
+    return enriched_deck
 
 
-def save_enriched_json(enriched_data: Dict[str, Any], output_file: str):
-    """
-    Save enriched metadata to JSON file atomically.
-    
-    Args:
-        enriched_data: Enriched metadata dictionary
-        output_file: Path to output JSON file
-    """
-    try:
-        # Add timestamp
-        enriched_data["timestamp"] = datetime.now().isoformat()
-        enriched_data["last_updated"] = time.time()
-        
-        # Write to temp file first, then rename (atomic write)
-        temp_file = f"{output_file}.tmp"
-        with open(temp_file, 'w') as f:
-            json.dump(enriched_data, f, indent=2, ensure_ascii=False)
-        
-        # Atomic rename
-        Path(temp_file).rename(output_file)
-        
-        logger.debug(f"Enriched metadata saved to {output_file}")
-        
-    except Exception as e:
-        logger.error(f"Failed to save enriched metadata: {e}", exc_info=True)
+
+
 
 
 def process_metadata_update(file_path: str):
@@ -270,7 +299,7 @@ def process_metadata_update(file_path: str):
     Args:
         file_path: Path to the JSON file that changed
     """
-    global _last_processed_time, _last_processed_content
+    global _last_processed_time, _last_processed_content, _last_active_deck, _last_deck1_active, _last_deck2_active
     
     # Debounce: check if we recently processed this file
     current_time = time.time()
@@ -283,52 +312,186 @@ def process_metadata_update(file_path: str):
         logger.warning("Failed to read JSON file")
         return
     
-    # Check if content actually changed
-    content_str = json.dumps(data, sort_keys=True)
-    if content_str == _last_processed_content:
-        logger.debug("Content unchanged, skipping processing")
-        return
-    
-    _last_processed_time = current_time
-    _last_processed_content = content_str
-    
-    logger.info("Processing metadata update...")
-    
-    # Extract active deck metadata
-    # First check which deck has active=true, fallback to active_deck field
+    # Determine current active deck based on active attribute
     deck1_active = data.get('deck1', {}).get('active', False)
     deck2_active = data.get('deck2', {}).get('active', False)
     
-    if deck1_active:
-        active_deck = 'deck1'
-    elif deck2_active:
-        active_deck = 'deck2'
+    if deck1_active and not deck2_active:
+        current_active_deck = 'deck1'
+    elif deck2_active and not deck1_active:
+        current_active_deck = 'deck2'
+    elif deck1_active and deck2_active:
+        # Both active - use the one marked as primary_active_deck from metadata_extractor
+        current_active_deck = data.get('active_deck', 'deck1')
     else:
-        # Fallback to active_deck field if active attribute not set
-        active_deck = data.get('active_deck', 'deck1')
+        # Fallback to active_deck field if no active attribute is true
+        current_active_deck = data.get('active_deck', 'deck1')
     
-    metadata = extract_active_deck_metadata(data)
+    # Check if content actually changed OR if active status changed
+    # Compare only basic fields (ignore enriched fields that we add)
+    basic_data = {
+        'deck1': {
+            'deck': data.get('deck1', {}).get('deck'),
+            'title': data.get('deck1', {}).get('title'),
+            'artist': data.get('deck1', {}).get('artist'),
+            'bpm': data.get('deck1', {}).get('bpm'),
+            'key': data.get('deck1', {}).get('key'),
+            'active': data.get('deck1', {}).get('active')
+        },
+        'deck2': {
+            'deck': data.get('deck2', {}).get('deck'),
+            'title': data.get('deck2', {}).get('title'),
+            'artist': data.get('deck2', {}).get('artist'),
+            'bpm': data.get('deck2', {}).get('bpm'),
+            'key': data.get('deck2', {}).get('key'),
+            'active': data.get('deck2', {}).get('active')
+        },
+        'active_deck': data.get('active_deck')
+    }
+    content_str = json.dumps(basic_data, sort_keys=True)
+    content_changed = content_str != _last_processed_content
     
-    if not metadata:
-        logger.warning("Could not extract active deck metadata")
+    # Check if active status of either deck changed
+    deck1_active_changed = deck1_active != _last_deck1_active
+    deck2_active_changed = deck2_active != _last_deck2_active
+    active_status_changed = deck1_active_changed or deck2_active_changed
+    
+    # Check if active deck changed
+    active_deck_changed = current_active_deck != _last_active_deck
+    
+    # Also check if active deck doesn't have enriched fields yet
+    active_deck_data = data.get(current_active_deck, {})
+    needs_enrichment = active_deck_data.get('active', False) and not active_deck_data.get('refined_keywords')
+    
+    # Process if content changed OR if active status changed OR if active deck changed OR needs enrichment
+    if not content_changed and not active_status_changed and not active_deck_changed and not needs_enrichment:
+        logger.debug("Content and active status unchanged, skipping processing")
         return
     
-    logger.info(f"Active deck: {active_deck} (deck1.active={deck1_active}, deck2.active={deck2_active}), Metadata: {metadata}")
+    if needs_enrichment:
+        logger.info(f"Active deck '{current_active_deck}' needs enrichment - processing")
+    elif active_status_changed:
+        logger.info(f"Active status changed - deck1: {_last_deck1_active}→{deck1_active}, deck2: {_last_deck2_active}→{deck2_active} - re-enriching")
+    elif active_deck_changed:
+        logger.info(f"Active deck changed from '{_last_active_deck}' to '{current_active_deck}' - re-enriching")
+    elif content_changed:
+        logger.info("Content changed - processing update")
     
-    # Enrich metadata
-    enriched = enrich_metadata(metadata)
-    enriched['active_deck'] = active_deck
+    _last_processed_time = current_time
+    _last_processed_content = content_str
+    _last_active_deck = current_active_deck
+    _last_deck1_active = deck1_active
+    _last_deck2_active = deck2_active
     
-    # Include raw deck data with active status for frontend
-    enriched['raw_data'] = {
-        'deck1': data.get('deck1', {}),
-        'deck2': data.get('deck2', {})
-    }
+    logger.info("Processing metadata update and enriching active decks...")
     
-    # Save enriched JSON
-    save_enriched_json(enriched, ENRICHED_JSON_FILE)
+    # Enrich active decks with transition system
+    deck1_data = data.get('deck1', {})
+    deck2_data = data.get('deck2', {})
     
-    logger.info("Metadata enrichment complete")
+    # Helper function to handle transition for a deck
+    def process_deck_transition(deck_data, deck_name, is_active):
+        if not is_active:
+            # Inactive deck - keep only basic metadata
+            return {
+                'deck': deck_data.get('deck'),
+                'title': deck_data.get('title'),
+                'artist': deck_data.get('artist'),
+                'bpm': deck_data.get('bpm'),
+                'key': deck_data.get('key'),
+                'active': False
+            }
+        
+        # Active deck - handle transition
+        current_enriched = deck_data.get('current_enriched')
+        next_enriched = deck_data.get('next_enriched')
+        
+        # Check if this is a new track (title/artist changed)
+        track_id = f"{deck_data.get('title')}|{deck_data.get('artist')}"
+        last_track_id = None
+        if current_enriched:
+            last_track_id = f"{current_enriched.get('title')}|{current_enriched.get('artist')}"
+        
+        is_new_track = track_id != last_track_id
+        
+        if is_new_track:
+            # New track detected - move current to next, create new current
+            logger.info(f"New track detected for {deck_name}: {deck_data.get('title')}")
+            
+            # Move current to next (for transition)
+            if current_enriched:
+                deck_data['next_enriched'] = current_enriched.copy()
+            
+            # Create new enriched data
+            new_enriched = enrich_deck_data(deck_data)
+            deck_data['current_enriched'] = new_enriched
+            
+            # Set transition state
+            deck_data['transition'] = {
+                'in_progress': True,
+                'start_time': time.time(),
+                'duration': 2.0  # 2 second transition
+            }
+        else:
+            # Same track - update current enriched if needed
+            if not current_enriched or not current_enriched.get('refined_keywords'):
+                # No current enriched data, create it
+                new_enriched = enrich_deck_data(deck_data)
+                deck_data['current_enriched'] = new_enriched
+            else:
+                # Keep existing current enriched
+                deck_data['current_enriched'] = current_enriched
+            
+            # Check if transition is complete
+            transition = deck_data.get('transition', {})
+            if transition.get('in_progress'):
+                elapsed = time.time() - transition.get('start_time', 0)
+                if elapsed >= transition.get('duration', 2.0):
+                    # Transition complete - clear next
+                    deck_data['next_enriched'] = None
+                    deck_data['transition'] = {'in_progress': False}
+                    logger.info(f"Transition complete for {deck_name}")
+        
+        # Merge current enriched into main deck data for easy access
+        if deck_data.get('current_enriched'):
+            current = deck_data['current_enriched']
+            deck_data['lastfm_tags'] = current.get('lastfm_tags', [])
+            deck_data['refined_keywords'] = current.get('refined_keywords', [])
+            deck_data['keyword_scores'] = current.get('keyword_scores', {})
+            deck_data['key_characteristics'] = current.get('key_characteristics', [])
+            deck_data['gifs'] = current.get('gifs', [])
+            logger.info(
+                f"After merge for {deck_name}: gifs={len(deck_data['gifs'])}, "
+                f"has_current_enriched={'current_enriched' in deck_data}"
+            )
+        
+        return deck_data
+    
+    # Process both decks
+    if deck1_active:
+        logger.info(f"Processing deck1: {deck1_data.get('title')} - {deck1_data.get('artist')}")
+        data['deck1'] = process_deck_transition(deck1_data, 'deck1', True)
+    else:
+        data['deck1'] = process_deck_transition(deck1_data, 'deck1', False)
+    
+    if deck2_active:
+        logger.info(f"Processing deck2: {deck2_data.get('title')} - {deck2_data.get('artist')}")
+        data['deck2'] = process_deck_transition(deck2_data, 'deck2', True)
+    else:
+        data['deck2'] = process_deck_transition(deck2_data, 'deck2', False)
+    
+    # Update active_deck field
+    data['active_deck'] = current_active_deck
+    
+    # Write enriched data back to djcap_output.json atomically
+    try:
+        temp_file = f"{file_path}.tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        Path(temp_file).rename(file_path)
+        logger.info("Enriched metadata saved to djcap_output.json")
+    except Exception as e:
+        logger.error(f"Failed to save enriched metadata: {e}", exc_info=True)
 
 
 class DjcapJsonHandler(FileSystemEventHandler):
@@ -341,9 +504,9 @@ class DjcapJsonHandler(FileSystemEventHandler):
         
         # Only process djcap_output.json
         if event.src_path == DJCAP_JSON_FILE:
-            logger.debug(f"File modified: {event.src_path}")
+            logger.info(f"File modified detected: {event.src_path}")
             # Use a small delay to ensure file write is complete
-            time.sleep(0.05)
+            time.sleep(0.1)
             process_metadata_update(event.src_path)
 
 
@@ -364,8 +527,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     logger.info("DjCap Metadata Processor starting...")
-    logger.info(f"Watching: {DJCAP_JSON_FILE}")
-    logger.info(f"Output: {ENRICHED_JSON_FILE}")
+    logger.info(f"Watching and enriching: {DJCAP_JSON_FILE}")
     
     # Check if input file exists
     if not os.path.exists(DJCAP_JSON_FILE):

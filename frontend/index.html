@@ -134,37 +134,43 @@
             margin-top: 20px;
         }
 
-        .gifs-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
-
-        .gif-card {
-            background: #f5f5f5;
-            border-radius: 10px;
+        .gif-display-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            aspect-ratio: 16 / 9;
+            border-radius: 15px;
             overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: transform 0.3s ease;
-        }
-
-        .gif-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            background: #000;
         }
 
         .gif-image {
             width: 100%;
-            height: 200px;
-            object-fit: cover;
+            height: 100%;
+            object-fit: contain;
+            transition: opacity 0.5s ease-in-out;
         }
 
-        .gif-title {
-            padding: 10px;
-            font-size: 0.9em;
-            color: #666;
-            text-align: center;
+        .gif-image.fade-out {
+            opacity: 0;
+        }
+
+        .gif-image.fade-in {
+            opacity: 1;
+        }
+
+        .gif-counter {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
         }
 
         .empty-state {
@@ -241,40 +247,43 @@
                         </span>
                     </div>
                     
-                    <div class="metadata-grid">
-                        <div class="metadata-item">
-                            <div class="metadata-label">Title</div>
-                            <div class="metadata-value">{{ enrichedData.metadata?.title || 'N/A' }}</div>
+                    <!-- Show active deck(s) data -->
+                    <div v-if="activeDeckData">
+                        <div class="metadata-grid">
+                            <div class="metadata-item">
+                                <div class="metadata-label">Title</div>
+                                <div class="metadata-value">{{ activeDeckData?.title || 'N/A' }}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Artist</div>
+                                <div class="metadata-value">{{ activeDeckData?.artist || 'N/A' }}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">BPM</div>
+                                <div class="metadata-value">{{ activeDeckData?.bpm || 'N/A' }}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Key</div>
+                                <div class="metadata-value">{{ activeDeckData?.key || 'N/A' }}</div>
+                            </div>
                         </div>
-                        <div class="metadata-item">
-                            <div class="metadata-label">Artist</div>
-                            <div class="metadata-value">{{ enrichedData.metadata?.artist || 'N/A' }}</div>
-                        </div>
-                        <div class="metadata-item">
-                            <div class="metadata-label">BPM</div>
-                            <div class="metadata-value">{{ enrichedData.metadata?.bpm || 'N/A' }}</div>
-                        </div>
-                        <div class="metadata-item">
-                            <div class="metadata-label">Key</div>
-                            <div class="metadata-value">{{ enrichedData.metadata?.key || 'N/A' }}</div>
-                        </div>
-                    </div>
 
-                    <div class="tags-section" v-if="enrichedData.lastfm_tags && enrichedData.lastfm_tags.length > 0">
-                        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #d32f2f;">Last.fm Tags</h3>
-                        <div class="tags">
-                            <span v-for="tag in enrichedData.lastfm_tags" :key="tag" class="tag lastfm">
-                                {{ tag }}
-                            </span>
+                        <div class="tags-section" v-if="activeDeckData?.lastfm_tags && activeDeckData.lastfm_tags.length > 0">
+                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #d32f2f;">Last.fm Tags</h3>
+                            <div class="tags">
+                                <span v-for="tag in activeDeckData.lastfm_tags" :key="tag" class="tag lastfm">
+                                    {{ tag }}
+                                </span>
+                            </div>
                         </div>
-                    </div>
 
-                    <div class="tags-section" v-if="enrichedData.refined_keywords && enrichedData.refined_keywords.length > 0">
-                        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Keywords</h3>
-                        <div class="tags">
-                            <span v-for="keyword in enrichedData.refined_keywords" :key="keyword" class="tag keyword">
-                                {{ keyword }}
-                            </span>
+                        <div class="tags-section" v-if="activeDeckData?.refined_keywords && activeDeckData.refined_keywords.length > 0">
+                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Keywords</h3>
+                            <div class="tags">
+                                <span v-for="keyword in activeDeckData.refined_keywords" :key="keyword" class="tag keyword">
+                                    {{ keyword }}
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -283,17 +292,50 @@
                     </div>
                 </div>
 
+                <!-- GIF Search Preview (inspired by AudioApis App.vue) -->
+                <div class="card" v-if="activeDeckData">
+                    <h2>🎬 GIF Search Preview</h2>
+                    <div class="tags-section">
+                        <h3 style="margin-top: 10px; margin-bottom: 10px; color: #667eea;">Search Keywords</h3>
+                        <div class="tags">
+                            <span v-for="keyword in gifKeywords"
+                                  :key="keyword"
+                                  class="tag keyword">
+                                "{{ keyword }}"
+                            </span>
+                        </div>
+                    </div>
+                    <div class="tags-section" style="margin-top: 15px;">
+                        <p style="color: #4ec9b0; font-weight: 600;">
+                            Found {{ gifCount }} GIF{{ gifCount === 1 ? '' : 's' }} for this track
+                        </p>
+                    </div>
+                </div>
+
                 <!-- GIFs Card -->
                 <div class="card">
                     <h2>🎬 Visuals</h2>
-                    <div v-if="enrichedData.gifs && enrichedData.gifs.length > 0" class="gifs-section">
-                        <div class="gifs-grid">
-                            <div v-for="(gif, index) in enrichedData.gifs" :key="index" class="gif-card">
-                                <img :src="gif.images?.downsized?.url || gif.url || gif.images?.fixed_height?.url" 
-                                     :alt="gif.title || 'GIF'"
-                                     class="gif-image"
-                                     @error="handleImageError">
-                                <div class="gif-title">{{ gif.title || 'GIF' }}</div>
+                    <div v-if="gifCount > 0" class="gifs-section">
+                        <div class="gif-display-container">
+                            <video v-if="currentGifVideoUrl"
+                                   class="gif-image"
+                                   :src="currentGifVideoUrl"
+                                   :poster="currentGifUrl"
+                                   playsinline
+                                   muted
+                                   preload="auto"
+                                   @loadedmetadata="onVideoLoaded"
+                                   @error="handleImageError"
+                                   @ended="onVideoEnded"
+                                   autoplay></video>
+                            <img v-else
+                                 :src="currentGifUrl" 
+                                 :alt="currentGifTitle"
+                                 class="gif-image"
+                                 @error="handleImageError"
+                                 @load="onGifLoad">
+                            <div class="gif-counter" v-if="gifCount > 1">
+                                {{ currentGifIndex + 1 }} / {{ gifCount }}
                             </div>
                         </div>
                     </div>
@@ -315,6 +357,22 @@
     </div>
 
     <script>
+        // Suppress browser extension errors in console
+        window.addEventListener('error', function(e) {
+            if (e.message && e.message.includes('message channel')) {
+                e.preventDefault();
+                return false;
+            }
+        });
+        
+        // Suppress unhandled promise rejections from browser extensions
+        window.addEventListener('unhandledrejection', function(e) {
+            if (e.reason && e.reason.message && e.reason.message.includes('message channel')) {
+                e.preventDefault();
+                return false;
+            }
+        });
+        
         const { createApp } = Vue;
 
         createApp({
@@ -322,8 +380,61 @@
                 return {
                     enrichedData: null,
                     isConnected: false,
-                    pollInterval: null
+                    pollInterval: null,
+                    gifTimeoutId: null,
+                    currentGifIndex: 0,
+                    lastTrackId: null,
+                    gifs: [],
+                    gifKeywords: [],
+                    lastGifTrackId: null,
+                    lastGifFetchAt: 0,
+                    lastGifKeywordsSig: '',
+                    gifFetchLimit: 5,
+                    gifRefreshMs: 10000,
+                    activeVideoRef: null,
+                    gifPlaybackRateBase: 120,
+                    gifFallbackDurationMs: 2000
                 };
+            },
+            computed: {
+                activeDeckName() {
+                    if (!this.enrichedData) return null;
+                    const fromActiveField = this.enrichedData.active_deck;
+                    if (fromActiveField && this.enrichedData[fromActiveField]) {
+                        return fromActiveField;
+                    }
+                    if (this.getDeckActive('deck1') && this.enrichedData.deck1) return 'deck1';
+                    if (this.getDeckActive('deck2') && this.enrichedData.deck2) return 'deck2';
+                    if (this.enrichedData.deck1) return 'deck1';
+                    if (this.enrichedData.deck2) return 'deck2';
+                    return null;
+                },
+                activeDeckData() {
+                    if (!this.enrichedData || !this.activeDeckName) return null;
+                    return this.enrichedData[this.activeDeckName] || null;
+                },
+                gifCount() {
+                    return this.gifs ? this.gifs.length : 0;
+                },
+                currentGif() {
+                    if (!this.gifs || this.gifs.length === 0) return null;
+                    return this.gifs[this.currentGifIndex % this.gifs.length];
+                },
+                currentGifUrl() {
+                    if (!this.currentGif) return '';
+                    return this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
+                },
+                currentGifVideoUrl() {
+                    if (!this.currentGif) return '';
+                    return this.currentGif.images?.original_mp4?.mp4 ||
+                           this.currentGif.images?.downsized_medium?.mp4 ||
+                           this.currentGif.images?.preview_mp4?.mp4 ||
+                           this.currentGif.images?.fixed_height?.mp4 ||
+                           '';
+                },
+                currentGifTitle() {
+                    return this.currentGif?.title || 'GIF';
+                }
             },
             mounted() {
                 this.fetchData();
@@ -336,19 +447,110 @@
                 if (this.pollInterval) {
                     clearInterval(this.pollInterval);
                 }
+                if (this.gifTimeoutId) {
+                    clearTimeout(this.gifTimeoutId);
+                }
             },
             methods: {
+                debugState() {
+                    console.log('enrichedData:', this.enrichedData);
+                    console.log('activeDeckData:', this.activeDeckData);
+                    console.log('gifKeywords:', this.gifKeywords);
+                    console.log('gifCount:', this.gifCount);
+                    console.log('currentGif:', this.currentGif);
+                    console.log('currentGifUrl:', this.currentGifUrl);
+                },
+                async fetchGifsForActiveDeck() {
+                    // Uses only basic deck data (title, artist, key) to ask backend
+                    // to call Giphy and return GIFs. Ignores any pre-enriched GIFs.
+                    const deck = this.activeDeckData;
+                    if (!deck || !deck.title || !deck.artist) {
+                        this.gifs = [];
+                        this.gifKeywords = [];
+                        this.lastGifTrackId = null;
+                        this.lastGifKeywordsSig = '';
+                        this.resetGifTimers();
+                        return;
+                    }
+
+                    // Build the same keywords the backend will use
+                    const keywords = ['#dance'];
+                    if (deck.title) keywords.push(String(deck.title));
+                    if (deck.artist) keywords.push(String(deck.artist));
+                    const keywordsSig = keywords.join('||');
+
+                    const trackId = `${this.activeDeckName || 'deck'}|${deck.title}|${deck.artist}|${deck.key || ''}`;
+                    const now = Date.now();
+                    const trackChanged = this.lastGifTrackId !== trackId;
+                    const keywordsChanged = this.lastGifKeywordsSig !== keywordsSig;
+                    const stale = (now - this.lastGifFetchAt) >= this.gifRefreshMs;
+
+                    if (!trackChanged && !keywordsChanged && !stale && this.gifs && this.gifs.length > 0) {
+                        // Already have recent GIFs for this track/keywords
+                        return;
+                    }
+
+                    if (trackChanged || keywordsChanged) {
+                        this.lastGifFetchAt = 0;
+                    }
+
+                    try {
+                        const resp = await fetch(`/api/gifs?deck=active&limit=${this.gifFetchLimit}`, {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/json',
+                            },
+                            cache: 'no-cache'
+                        });
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            this.gifs = data.gifs || [];
+                            this.gifKeywords = data.keywords || [];
+                            this.lastGifTrackId = trackId;
+                            this.lastGifFetchAt = Date.now();
+                            this.lastGifKeywordsSig = keywordsSig;
+
+                            // Reset playback for new gifs
+                            this.currentGifIndex = 0;
+                            this.resetGifTimers();
+                        } else {
+                            console.error('Error fetching gifs:', resp.status, resp.statusText);
+                        }
+                    } catch (err) {
+                        console.error('Error fetching gifs:', err);
+                    }
+                },
                 async fetchData() {
                     try {
-                        const response = await fetch('/api/enriched');
+                        const response = await fetch('/api/enriched', {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/json',
+                            },
+                            // Prevent browser extensions from interfering
+                            cache: 'no-cache'
+                        });
+                        
                         if (response.ok) {
+                            const oldTrackId = this.lastTrackId;
                             const data = await response.json();
                             this.enrichedData = data;
                             this.isConnected = true;
+
+                            // Fetch GIFs based only on deck data (title, artist, key)
+                            await this.fetchGifsForActiveDeck();
+
+                            // Log current state after each successful fetch
+                            this.debugState();
                         } else {
                             this.isConnected = false;
                         }
                     } catch (error) {
+                        // Ignore browser extension errors (they're harmless)
+                        if (error.message && error.message.includes('message channel')) {
+                            // This is a browser extension error, ignore it
+                            return;
+                        }
                         console.error('Error fetching data:', error);
                         this.isConnected = false;
                     }
@@ -362,17 +564,51 @@
                     // Hide broken images
                     event.target.style.display = 'none';
                 },
+                resetGifTimers() {
+                    if (this.gifTimeoutId) {
+                        clearTimeout(this.gifTimeoutId);
+                        this.gifTimeoutId = null;
+                    }
+                    this.activeVideoRef = null;
+                },
+                advanceGif() {
+                    if (!this.activeDeckData || this.gifCount === 0) return;
+                    this.resetGifTimers();
+                    this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
+                },
                 getDeckActive(deckName) {
-                    // Check if deck is active from the enriched data
-                    // First try to get from the raw data if available, otherwise use active_deck
-                    if (this.enrichedData && this.enrichedData.raw_data) {
-                        const deck = this.enrichedData.raw_data[deckName];
+                    // Check if deck is active from djcap_output.json (now contains all data)
+                    if (this.enrichedData && this.enrichedData[deckName]) {
+                        const deck = this.enrichedData[deckName];
                         if (deck && typeof deck.active === 'boolean') {
                             return deck.active;
                         }
                     }
                     // Fallback to active_deck field
                     return this.enrichedData && this.enrichedData.active_deck === deckName;
+                },
+                onGifLoad() {
+                    // Fallback for GIFs without video: schedule advance based on BPM
+                    const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
+                    const bpmFactor = bpm / this.gifPlaybackRateBase;
+                    const duration = Math.max(500, this.gifFallbackDurationMs / bpmFactor);
+                    this.resetGifTimers();
+                    this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
+                },
+                onVideoLoaded(event) {
+                    const video = event.target;
+                    this.activeVideoRef = video;
+                    const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
+                    const rate = bpm / this.gifPlaybackRateBase;
+                    video.playbackRate = rate;
+                    video.currentTime = 0;
+                    video.loop = false;
+                    video.muted = true;
+                    this.resetGifTimers();
+                    video.play().catch(() => {});
+                },
+                onVideoEnded() {
+                    this.advanceGif();
                 }
             }
         }).mount('#app');

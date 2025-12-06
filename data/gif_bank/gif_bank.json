@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "source": "AudioApis and DjCap Giphy responses",
+  "description": "Small offline GIF bank used by DjCap when Giphy API is unavailable or returns no results.",
+  "gifs": [
+    {
+      "id": "VHlkEyuvgJeOwXYyux",
+      "url": "https://media0.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/VHlkEyuvgJeOwXYyux/giphy.gif",
+      "title": "Tick Tock GIF by Clean Bandit",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "rockabye", "dance", "pop"]
+    },
+    {
+      "id": "GDH8VYmK4JyAE",
+      "url": "https://media3.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/GDH8VYmK4JyAE/giphy.gif",
+      "title": "sean paul dance GIF by Clean Bandit",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "sean paul", "rockabye", "dance"]
+    },
+    {
+      "id": "l4FGCFThuenenKNSE",
+      "url": "https://media1.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l4FGCFThuenenKNSE/giphy.gif",
+      "title": "clean bandit GIF by Big Beat Records",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 480,
+      "tags": ["clean bandit", "band", "performance"]
+    },
+    {
+      "id": "3ohzdGnJ8hnvp5K7wA",
+      "url": "https://media0.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohzdGnJ8hnvp5K7wA/giphy.gif",
+      "title": "clean bandit GIF by Glastonbury Festival 2017",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 262,
+      "tags": ["clean bandit", "festival", "live", "stage"]
+    },
+    {
+      "id": "3ohjUTjS8vWjKTymOI",
+      "url": "https://media4.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUTjS8vWjKTymOI/giphy.gif",
+      "title": "fox tv GIF by FOX Teen Choice",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["awards", "stage", "performance"]
+    },
+    {
+      "id": "hvp5verMlaZkN9aBRS",
+      "url": "https://media3.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/hvp5verMlaZkN9aBRS/giphy.gif",
+      "title": "Tick Tock GIF by Clean Bandit",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "clock", "tick tock", "time"]
+    },
+    {
+      "id": "54znad3OkvcqY",
+      "url": "https://media1.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/54znad3OkvcqY/giphy.gif",
+      "title": "clean bandit GIF by NOW That's Music",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "now thats music", "album"]
+    },
+    {
+      "id": "u2dRJDsAnsaKA",
+      "url": "https://media0.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/u2dRJDsAnsaKA/giphy.gif",
+      "title": "clean bandit GIF by NOW That's Music",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "now thats music"]
+    },
+    {
+      "id": "9mNpg8alRy6w8",
+      "url": "https://media3.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/9mNpg8alRy6w8/giphy.gif",
+      "title": "clean bandit GIF by NOW That's Music",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 270,
+      "tags": ["clean bandit", "now thats music"]
+    },
+    {
+      "id": "xUPGcCqKS8Spwa5NTO",
+      "url": "https://media0.giphy.com/media/v1.Y2lkPTllOThlZDM2dWV4aXZlcDN0aW94ZjFmdmR1bXE4cHpsYTZpenF0aTdzanBqaGNndCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/xUPGcCqKS8Spwa5NTO/giphy.gif",
+      "title": "GIF by Big Beat Records",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 480,
+      "tags": ["big beat records", "electronic", "dance"]
+    },
+    {
+      "id": "oh7XlIC2YjEcdLYs7V",
+      "url": "https://media4.giphy.com/media/v1.Y2lkPTllOThlZDM2cG1yZThudnpkdnluaGpsbzh3MWd3eG15Nnp1M2Z0cDhhZXlyZnhxZyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/oh7XlIC2YjEcdLYs7V/giphy.gif",
+      "title": "Sleepy Good Night GIF by SacredPlantCO",
+      "rating": "g",
+      "source": "",
+      "width": 500,
+      "height": 500,
+      "tags": ["sleep", "night", "calm"]
+    },
+    {
+      "id": "pLh5zL7jhWj24CxTM9",
+      "url": "https://media1.giphy.com/media/v1.Y2lkPTllOThlZDM2cG1yZThudnpkdnluaGpsbzh3MWd3eG15Nnp1M2Z0cDhhZXlyZnhxZyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/pLh5zL7jhWj24CxTM9/giphy.gif",
+      "title": "Good Night Stars GIF by Neeryletters",
+      "rating": "g",
+      "source": "",
+      "width": 480,
+      "height": 480,
+      "tags": ["good night", "stars", "calm", "sleep"]
+    },
+    {
+      "id": "1Bn7mDS4gJ95q9ZbNq",
+      "url": "https://media1.giphy.com/media/v1.Y2lkPTllOThlZDM2ZXhzNTF0b3NraGdvaTRjNWthbDI4ZW8xNzJtMTU3bXlsdWM2eGsxaSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/1Bn7mDS4gJ95q9ZbNq/giphy.gif",
+      "title": "Heroic GIF",
+      "rating": "g",
+      "source": "",
+      "width": 269,
+      "height": 450,
+      "tags": ["heroic", "triumphant", "powerful"]
+    }
+  ]
+}
+
+

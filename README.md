@@ -117,40 +117,47 @@ python djcap_processor.py
 
 The processor will:
 - Monitor `data/output/djcap_output.json` for changes
-- Extract metadata from the active deck
-- Enrich with Last.fm tags, keywords, and GIFs
-- Save enriched results to `data/output/djcap_enriched.json`
+- Enrich active decks (where `active: true`) with Last.fm tags, keywords, and GIFs
+- Write enriched data directly back to `data/output/djcap_output.json`
+- Inactive decks keep only basic metadata (title, artist, BPM, key, active)
 
-### Enriched Output Format
+### Output Format
 
-The enriched JSON file (`data/output/djcap_enriched.json`) contains:
+The JSON file (`data/output/djcap_output.json`) contains:
 
 ```json
 {
-  "active_deck": "deck1",
-  "metadata": {
+  "deck1": {
+    "deck": "deck1",
     "title": "Song Title",
     "artist": "Artist Name",
     "bpm": 128,
-    "key": "1A"
+    "key": "1A",
+    "active": true,
+    "lastfm_tags": ["electronic", "dance", "energetic"],
+    "refined_keywords": ["Song Title", "Artist Name", "electronic", "dance", "innocent", "pure"],
+    "keyword_scores": {
+      "electronic": 0.95,
+      "dance": 0.88
+    },
+    "key_characteristics": ["innocent", "pure", "simple", "happy"],
+    "gifs": [...]
   },
-  "lastfm_tags": ["electronic", "dance", "energetic"],
-  "refined_keywords": ["electronic", "dance"],
-  "keyword_scores": {
-    "electronic": 0.95,
-    "dance": 0.88
+  "deck2": {
+    "deck": "deck2",
+    "title": "Another Song",
+    "artist": "Another Artist",
+    "bpm": 130,
+    "key": "2B",
+    "active": false
   },
-  "gifs": [
-    {
-      "url": "https://...",
-      "title": "...",
-      ...
-    }
-  ],
+  "active_deck": "deck1",
   "timestamp": "2024-12-04T20:30:45.123456",
   "last_updated": 1701724245.123456
 }
 ```
+
+**Note:** Only active decks (`active: true`) are enriched with `lastfm_tags`, `refined_keywords`, `keyword_scores`, `key_characteristics`, and `gifs`. Inactive decks contain only basic metadata.
 
 ## File Watching
 
@@ -172,8 +179,7 @@ Edit `djcap.py` to change:
 
 Edit `djcap_processor.py` to change:
 
-- `DJCAP_JSON_FILE`: Path to input JSON file (default: "data/output/djcap_output.json")
-- `ENRICHED_JSON_FILE`: Path to enriched output file (default: "data/output/djcap_enriched.json")
+- `DJCAP_JSON_FILE`: Path to JSON file to watch and enrich (default: "data/output/djcap_output.json")
 
 ## Troubleshooting
 
@@ -185,6 +191,11 @@ Edit `djcap_processor.py` to change:
 ### "ocrmac not available"
 - Install ocrmac: `pip install ocrmac`
 - Ensure you're on macOS (ocrmac requires macOS)
+
+### Active deck not detected / both decks inactive
+- The play-button detector looks for the neon green outline around the play button. If the outline coordinates drift (different resolution/layout), recalibrate using `tools/define_play_buttons.py` to update `data/region_coordinates.json` (`deck1_play_button` / `deck2_play_button`).
+- After recalibration, restart `djcap.py` (and the frontend if running) so the new coordinates are picked up.
+- When both buttons appear green, the detector keeps only the primary deck active (`active_deck`) and marks the other deck inactive to avoid both decks showing `active: true`.
 
 ### Poor OCR accuracy
 - Ensure djay Pro window is visible (not minimized)

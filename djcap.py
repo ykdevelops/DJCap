@@ -36,13 +36,51 @@ def signal_handler(sig, frame):
 
 def save_metadata_to_json(metadata: dict, output_file: str):
     """
-    Save metadata to JSON file in a format that's easy for other apps to watch.
+    Save metadata to JSON file, preserving existing enriched data.
     
     Args:
         metadata: Dictionary with deck1, deck2, active_deck, and timestamp
         output_file: Path to JSON file
     """
     try:
+        # Preserve existing enriched data if file exists
+        existing_data = {}
+        if Path(output_file).exists():
+            try:
+                with open(output_file, 'r') as f:
+                    existing_content = f.read().strip()
+                    if existing_content:
+                        existing_data = json.loads(existing_content)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass  # If file is corrupted or doesn't exist, start fresh
+        
+        # Merge: preserve enriched fields from existing data
+        # Only update basic metadata fields (title, artist, bpm, key, active)
+        for deck_name in ['deck1', 'deck2']:
+            if deck_name in existing_data and deck_name in metadata:
+                existing_deck = existing_data[deck_name]
+                new_deck = metadata[deck_name]
+                
+                # Preserve enriched fields if deck is still active and metadata matches
+                if (existing_deck.get('active', False) and 
+                    new_deck.get('active', False) and
+                    existing_deck.get('title') == new_deck.get('title') and
+                    existing_deck.get('artist') == new_deck.get('artist')):
+                    # Keep enriched fields from existing data
+                    for field in ['lastfm_tags', 'refined_keywords', 'keyword_scores', 
+                                 'key_characteristics', 'gifs', 'current_enriched', 'next_enriched']:
+                        if field in existing_deck:
+                            new_deck[field] = existing_deck[field]
+                    # Preserve transition state for the same active track
+                    if 'transition' in existing_deck:
+                        new_deck['transition'] = existing_deck['transition']
+
+        # If neither deck is marked active, keep previous active_deck to avoid flapping
+        if (not metadata.get('deck1', {}).get('active') and
+            not metadata.get('deck2', {}).get('active') and
+            'active_deck' in existing_data):
+            metadata['active_deck'] = existing_data.get('active_deck', metadata.get('active_deck'))
+        
         # Add timestamp
         metadata["timestamp"] = datetime.now().isoformat()
         metadata["last_updated"] = time.time()
@@ -55,7 +93,7 @@ def save_metadata_to_json(metadata: dict, output_file: str):
         # Atomic rename (works on Unix-like systems)
         Path(temp_file).rename(output_file)
         
-        logger.debug(f"Metadata saved to {output_file}")
+        logger.debug(f"Metadata saved to {output_file} (preserved enriched data)")
         
     except Exception as e:
         logger.error(f"Failed to save metadata to JSON: {e}", exc_info=True)
