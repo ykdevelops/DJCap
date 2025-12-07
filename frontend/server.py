@@ -8,19 +8,10 @@ import socketserver
 import json
 import os
 import sys
+import mimetypes
+import random
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
-
-# Add AudioApis to path so we can reuse its Giphy client
-AUDIOAPIS_PATH = "/Users/youssefkhalil/AudioApis"
-if os.path.exists(AUDIOAPIS_PATH):
-    sys.path.insert(0, AUDIOAPIS_PATH)
-    try:
-        from metadata.giphy_client import fetch_gifs_for_keywords
-    except Exception:
-        fetch_gifs_for_keywords = None
-else:
-    fetch_gifs_for_keywords = None
 
 from src.key_translator import translate_key_to_characteristics
 
@@ -28,6 +19,9 @@ from src.key_translator import translate_key_to_characteristics
 PORT = 8080
 OUTPUT_JSON_PATH = Path(__file__).parent.parent / "data" / "output" / "djcap_output.json"
 FRONTEND_DIR = Path(__file__).parent
+# Local media bank (mp4/gif files)
+BANK_DIR = Path("/Users/youssefkhalil/Desktop/bank copy")
+MEDIA_PREFIX = "/media/"
 # Allow quick restarts without waiting for TIME_WAIT sockets to clear
 socketserver.TCPServer.allow_reuse_address = True
 
@@ -44,6 +38,8 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_output_json()
         elif parsed_path.path == '/api/gifs':
             self.serve_gifs(parsed_path)
+        elif parsed_path.path.startswith(MEDIA_PREFIX):
+            self.serve_media(parsed_path.path[len(MEDIA_PREFIX):])
         else:
             # Serve static files
             super().do_GET()
@@ -77,9 +73,7 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
 
     def serve_gifs(self, parsed_path):
         """
-        Serve GIFs for the current deck by calling Giphy directly using deck data.
-        This ignores any pre-enriched GIFs and uses only the basic deck metadata:
-        title, artist, key (translated to characteristics).
+        Serve GIFs/videos from the local bank directory. No external API calls.
         """
         try:
             if not OUTPUT_JSON_PATH.exists():
@@ -119,31 +113,17 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
             bpm = deck_data.get('bpm')
             key = deck_data.get('key')
 
-            # Build keywords: only the default tag, title, and artist
-            keywords = ['#dance']
+            total_limit = int(query.get('limit', ['20'])[0] or 20)
+            total_limit = max(1, min(total_limit, 100))
+
+            gifs = self._get_local_gifs(limit=total_limit)
+
+            keywords = []
             if title:
                 keywords.append(str(title))
             if artist:
                 keywords.append(str(artist))
-
-            # Total limit and per-keyword limit
-            total_limit = int(query.get('limit', ['20'])[0] or 20)
-            total_limit = max(1, min(total_limit, 100))
-
-            gifs = []
-            used_keywords = keywords
-
-            if fetch_gifs_for_keywords and keywords:
-                per_keyword = max(1, total_limit // max(1, len(keywords)))
-                try:
-                    gifs = fetch_gifs_for_keywords(keywords, limit_per_keyword=per_keyword)
-                except Exception as e:
-                    gifs = []
-            else:
-                used_keywords = []
-
-            # Trim to total_limit
-            gifs = gifs[:total_limit]
+            keywords.extend(translate_key_to_characteristics(key))
 
             response = {
                 'success': True,
@@ -154,7 +134,7 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
                     'bpm': bpm,
                     'key': key
                 },
-                'keywords': used_keywords,
+                'keywords': keywords,
                 'gifs': gifs
             }
 
@@ -175,6 +155,63 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         """Override to reduce log noise."""
         pass
+
+    def _get_local_gifs(self, limit: int):
+        """
+        Return a list of local MP4 assets from BANK_DIR (numbered files only) as dicts with url/title.
+        """
+        if not BANK_DIR.exists():
+            return []
+        # Only use numbered mp4 files in the root of BANK_DIR (ignore subfolders like giphy/)
+        paths = [p for p in BANK_DIR.glob("*.mp4") if p.name.rstrip(".mp4").isdigit()]
+        if not paths:
+            return []
+        random.shuffle(paths)
+        selected = paths[:limit]
+        gifs = []
+        for p in selected:
+            rel = p.relative_to(BANK_DIR)
+            gifs.append({
+                "id": p.stem,
+                "url": f"{MEDIA_PREFIX}{rel.as_posix()}",
+                "title": p.stem,
+                "mime": mimetypes.guess_type(p.name)[0] or "video/mp4"
+            })
+        return gifs
+
+    def serve_media(self, rel_path: str):
+        """
+        Serve a local media file from BANK_DIR at /media/<relative>.
+        """
+        try:
+            bank_resolved = BANK_DIR.resolve()
+        except FileNotFoundError:
+            bank_resolved = BANK_DIR
+
+        target = (BANK_DIR / rel_path).resolve()
+        if not str(target).startswith(str(bank_resolved)):
+            self.send_response(403)
+            self.end_headers()
+            return
+        if not target.exists() or not target.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        mime, _ = mimetypes.guess_type(target.name)
+        mime = mime or "video/mp4"
+        try:
+            with open(target, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
 
 
 def main():

@@ -136,8 +136,9 @@
 
         .gif-display-container {
             position: relative;
-            width: 100%;
-            max-width: 600px;
+            width: min(100vw - 40px, 1000px);
+            max-width: 1000px;
+            max-height: 1000px;
             margin: 0 auto;
             aspect-ratio: 16 / 9;
             border-radius: 15px;
@@ -334,9 +335,6 @@
                                  class="gif-image"
                                  @error="handleImageError"
                                  @load="onGifLoad">
-                            <div class="gif-counter" v-if="gifCount > 1">
-                                {{ currentGifIndex + 1 }} / {{ gifCount }}
-                            </div>
                         </div>
                     </div>
                     <div v-else class="empty-state">
@@ -389,6 +387,8 @@
                     lastGifTrackId: null,
                     lastGifFetchAt: 0,
                     lastGifKeywordsSig: '',
+                    recentGifIds: [],
+                    maxRecentGifHistory: 100,
                     gifFetchLimit: 5,
                     gifRefreshMs: 10000,
                     activeVideoRef: null,
@@ -426,6 +426,11 @@
                 },
                 currentGifVideoUrl() {
                     if (!this.currentGif) return '';
+                    const url = this.currentGif.url || '';
+                    const mime = (this.currentGif.mime || '').toLowerCase();
+                    if (mime.startsWith('video/') || url.toLowerCase().endswith('.mp4')) {
+                        return url;
+                    }
                     return this.currentGif.images?.original_mp4?.mp4 ||
                            this.currentGif.images?.downsized_medium?.mp4 ||
                            this.currentGif.images?.preview_mp4?.mp4 ||
@@ -461,8 +466,7 @@
                     console.log('currentGifUrl:', this.currentGifUrl);
                 },
                 async fetchGifsForActiveDeck() {
-                    // Uses only basic deck data (title, artist, key) to ask backend
-                    // to call Giphy and return GIFs. Ignores any pre-enriched GIFs.
+                    // Fetch local GIF/MP4 assets from backend (no external API)
                     const deck = this.activeDeckData;
                     if (!deck || !deck.title || !deck.artist) {
                         this.gifs = [];
@@ -473,10 +477,11 @@
                         return;
                     }
 
-                    // Build the same keywords the backend will use
-                    const keywords = ['#dance'];
+                    // Build a signature from deck data to trigger refetch
+                    const keywords = [];
                     if (deck.title) keywords.push(String(deck.title));
                     if (deck.artist) keywords.push(String(deck.artist));
+                    if (deck.key) keywords.push(String(deck.key));
                     const keywordsSig = keywords.join('||');
 
                     const trackId = `${this.activeDeckName || 'deck'}|${deck.title}|${deck.artist}|${deck.key || ''}`;
@@ -504,7 +509,11 @@
                         });
                         if (resp.ok) {
                             const data = await resp.json();
-                            this.gifs = data.gifs || [];
+                            const allGifs = data.gifs || [];
+                            const filtered = allGifs.filter(g => g?.id && !this.recentGifIds.includes(g.id));
+                            const selected = filtered.length > 0 ? filtered : allGifs;
+                            const shuffled = this.shuffleArray(selected.slice());
+                            this.gifs = shuffled;
                             this.gifKeywords = data.keywords || [];
                             this.lastGifTrackId = trackId;
                             this.lastGifFetchAt = Date.now();
@@ -573,8 +582,22 @@
                 },
                 advanceGif() {
                     if (!this.activeDeckData || this.gifCount === 0) return;
+                    const current = this.currentGif;
+                    if (current && current.id) {
+                        this.recentGifIds.push(current.id);
+                        if (this.recentGifIds.length > this.maxRecentGifHistory) {
+                            this.recentGifIds.splice(0, this.recentGifIds.length - this.maxRecentGifHistory);
+                        }
+                    }
                     this.resetGifTimers();
                     this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
+                },
+                shuffleArray(arr) {
+                    for (let i = arr.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [arr[i], arr[j]] = [arr[j], arr[i]];
+                    }
+                    return arr;
                 },
                 getDeckActive(deckName) {
                     // Check if deck is active from djcap_output.json (now contains all data)

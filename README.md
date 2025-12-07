@@ -197,6 +197,12 @@ Edit `djcap_processor.py` to change:
 - After recalibration, restart `djcap.py` (and the frontend if running) so the new coordinates are picked up.
 - When both buttons appear green, the detector keeps only the primary deck active (`active_deck`) and marks the other deck inactive to avoid both decks showing `active: true`.
 
+### Using local GIF/MP4 visuals instead of Giphy
+- External API calls were removed; visuals now come from local files in `/Users/youssefkhalil/Desktop/bank copy` (numbered `.mp4` files in the root of that folder).
+- Backend serves media at `/media/<filename>` and `/api/gifs` returns shuffled local entries while avoiding repeats (keeps a recent history window).
+- Frontend auto-advances visuals at the active deck’s BPM and avoids showing the same item again within the recent history window.
+- A minimal viewer page is available at `frontend/viewer.html` to display only the visuals at a responsive size (up to 1000px, maintaining aspect ratio and constrained by viewport).
+
 ### Poor OCR accuracy
 - Ensure djay Pro window is visible (not minimized)
 - Check that the window size is reasonable (not too small)

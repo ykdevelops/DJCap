@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DjCap - Visual Viewer</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0f172a;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 10px;
+        }
+        .player-shell {
+            width: min(100vw, calc(100vh * 16 / 9));
+            height: min(100vh, calc(100vw * 9 / 16));
+            max-width: 1000px;
+            max-height: 1000px;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            position: relative;
+        }
+        .player-shell video, .player-shell img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+        .badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            padding: 6px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div class="player-shell">
+        <div class="badge" v-if="activeDeckName">
+            {{ activeDeckName.toUpperCase() }} • {{ activeDeckData?.title || 'Loading...' }}
+        </div>
+        <video v-if="currentGifVideoUrl"
+               :src="currentGifVideoUrl"
+               :poster="currentGifUrl"
+               playsinline
+               muted
+               preload="auto"
+               @loadedmetadata="onVideoLoaded"
+               @ended="onVideoEnded"
+               autoplay></video>
+        <img v-else
+             :src="currentGifUrl"
+             :alt="currentGifTitle"
+             @error="handleImageError"
+             @load="onGifLoad">
+    </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+
+createApp({
+    data() {
+        return {
+            enrichedData: null,
+            gifs: [],
+            gifKeywords: [],
+            currentGifIndex: 0,
+            lastGifTrackId: null,
+            lastGifFetchAt: 0,
+            lastGifKeywordsSig: '',
+            recentGifIds: [],
+            maxRecentGifHistory: 100,
+            gifFetchLimit: 20,
+            gifRefreshMs: 10000,
+            gifTimeoutId: null,
+            activeVideoRef: null,
+            gifPlaybackRateBase: 120,
+            gifFallbackDurationMs: 2000,
+            pollInterval: null
+        };
+    },
+    computed: {
+        activeDeckName() {
+            if (!this.enrichedData) return null;
+            const fromActive = this.enrichedData.active_deck;
+            if (fromActive && this.enrichedData[fromActive]) return fromActive;
+            if (this.getDeckActive('deck1') && this.enrichedData.deck1) return 'deck1';
+            if (this.getDeckActive('deck2') && this.enrichedData.deck2) return 'deck2';
+            if (this.enrichedData.deck1) return 'deck1';
+            if (this.enrichedData.deck2) return 'deck2';
+            return null;
+        },
+        activeDeckData() {
+            if (!this.enrichedData || !this.activeDeckName) return null;
+            return this.enrichedData[this.activeDeckName] || null;
+        },
+        gifCount() {
+            return this.gifs ? this.gifs.length : 0;
+        },
+        currentGif() {
+            if (!this.gifs || this.gifs.length === 0) return null;
+            return this.gifs[this.currentGifIndex % this.gifs.length];
+        },
+        currentGifUrl() {
+            if (!this.currentGif) return '';
+            return this.currentGif.url || '';
+        },
+        currentGifVideoUrl() {
+            if (!this.currentGif) return '';
+            const url = (this.currentGif.url || '').toLowerCase();
+            const mime = (this.currentGif.mime || '').toLowerCase();
+            if (mime.startsWith('video/') || url.endsWith('.mp4')) return this.currentGif.url;
+            return '';
+        },
+        currentGifTitle() {
+            return this.currentGif?.title || 'GIF';
+        }
+    },
+    mounted() {
+        this.fetchData();
+        this.pollInterval = setInterval(() => this.fetchData(), 2000);
+    },
+    beforeUnmount() {
+        if (this.pollInterval) clearInterval(this.pollInterval);
+        if (this.gifTimeoutId) clearTimeout(this.gifTimeoutId);
+    },
+    methods: {
+        async fetchData() {
+            try {
+                const response = await fetch('/api/enriched', { headers: { 'Accept': 'application/json' }, cache: 'no-cache' });
+                if (response.ok) {
+                    this.enrichedData = await response.json();
+                    await this.fetchGifsForActiveDeck();
+                }
+            } catch (_) {}
+        },
+        async fetchGifsForActiveDeck() {
+            const deck = this.activeDeckData;
+            if (!deck || !deck.title || !deck.artist) {
+                this.gifs = [];
+                this.gifKeywords = [];
+                this.lastGifTrackId = null;
+                this.lastGifKeywordsSig = '';
+                this.resetGifTimers();
+                return;
+            }
+            const keywords = [];
+            if (deck.title) keywords.push(String(deck.title));
+            if (deck.artist) keywords.push(String(deck.artist));
+            if (deck.key) keywords.push(String(deck.key));
+            const keywordsSig = keywords.join('||');
+            const trackId = `${this.activeDeckName || 'deck'}|${deck.title}|${deck.artist}|${deck.key || ''}`;
+            const now = Date.now();
+            const trackChanged = this.lastGifTrackId !== trackId;
+            const keywordsChanged = this.lastGifKeywordsSig !== keywordsSig;
+            const stale = (now - this.lastGifFetchAt) >= this.gifRefreshMs;
+            if (!trackChanged && !keywordsChanged && !stale && this.gifs && this.gifs.length > 0) return;
+            if (trackChanged || keywordsChanged) this.lastGifFetchAt = 0;
+            try {
+                const resp = await fetch(`/api/gifs?deck=active&limit=${this.gifFetchLimit}`, { headers: { 'Accept': 'application/json' }, cache: 'no-cache' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const allGifs = data.gifs || [];
+                    const filtered = allGifs.filter(g => g?.id && !this.recentGifIds.includes(g.id));
+                    const selected = filtered.length > 0 ? filtered : allGifs;
+                    const shuffled = this.shuffleArray(selected.slice());
+                    this.gifs = shuffled;
+                    this.gifKeywords = data.keywords || [];
+                    this.lastGifTrackId = trackId;
+                    this.lastGifFetchAt = Date.now();
+                    this.lastGifKeywordsSig = keywordsSig;
+                    this.currentGifIndex = 0;
+                    this.resetGifTimers();
+                }
+            } catch (_) {}
+        },
+        getDeckActive(deckName) {
+            if (this.enrichedData && this.enrichedData[deckName]) {
+                const deck = this.enrichedData[deckName];
+                if (deck && typeof deck.active === 'boolean') return deck.active;
+            }
+            return this.enrichedData && this.enrichedData.active_deck === deckName;
+        },
+        handleImageError(event) { event.target.style.display = 'none'; },
+        resetGifTimers() {
+            if (this.gifTimeoutId) clearTimeout(this.gifTimeoutId);
+            this.gifTimeoutId = null;
+            this.activeVideoRef = null;
+        },
+        advanceGif() {
+            if (!this.activeDeckData || this.gifCount === 0) return;
+            const current = this.currentGif;
+            if (current && current.id) {
+                this.recentGifIds.push(current.id);
+                if (this.recentGifIds.length > this.maxRecentGifHistory) {
+                    this.recentGifIds.splice(0, this.recentGifIds.length - this.maxRecentGifHistory);
+                }
+            }
+            this.resetGifTimers();
+            this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
+        },
+        shuffleArray(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        },
+        onGifLoad() {
+            const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
+            const bpmFactor = bpm / this.gifPlaybackRateBase;
+            const duration = Math.max(500, this.gifFallbackDurationMs / bpmFactor);
+            this.resetGifTimers();
+            this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
+        },
+        onVideoLoaded(event) {
+            const video = event.target;
+            this.activeVideoRef = video;
+            const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
+            const rate = bpm / this.gifPlaybackRateBase;
+            video.playbackRate = rate;
+            video.currentTime = 0;
+            video.loop = false;
+            video.muted = true;
+            this.resetGifTimers();
+            video.play().catch(() => {});
+        },
+        onVideoEnded() { this.advanceGif(); }
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
+
