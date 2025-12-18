@@ -415,13 +415,11 @@ def _detect_active_deck_by_play_button(img_array: np.ndarray, coords: Optional[D
         avg_blue = np.mean(blue_channel)
         green_advantage = avg_green - max(avg_red, avg_blue)
         
-        # Active if any reasonable green signal is present; thresholds kept permissive
-        is_green = (
-            green_ratio1 > 0.005            # any pixels within standard green range
-            or green_ratio2 > 0.003         # any pixels within bright green range
-            or green_dominant_ratio > 0.01  # some pixels strongly green-dominant
-            or (green_advantage > 25 and avg_green > 80)  # overall green-lifted
-        )
+        # Active if:
+        # 1. Green-dominant pixels > 3% (green is 55+ points higher, green > 100, red≈blue), OR
+        # 2. Green advantage is 50+ points AND green is bright (> 100)
+        # This should catch actual green buttons (like Deck 2: green=175, red=113, blue=108)
+        is_green = (green_dominant_ratio > 0.03) or (green_advantage > 50 and avg_green > 100)
         
         logger.info(f"{deck_name} play button - Green pixels: {green_count1}/{total_pixels} ({green_ratio1:.2%}), "
                    f"Bright: {green_count2}/{total_pixels} ({green_ratio2:.2%}), "
@@ -544,19 +542,10 @@ def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
     # Returns: (primary_active_deck, deck1_is_active, deck2_is_active)
     active_deck, deck1_is_active, deck2_is_active = _detect_active_deck_by_play_button(img_array, coords)
     
-    # Add active status to each deck
-    deck1_active = bool(deck1_is_active)
-    deck2_active = bool(deck2_is_active)
-
-    # If both were detected as active, prefer the primary deck and mark the other inactive
-    if deck1_active and deck2_active:
-        if active_deck == "deck1":
-            deck2_active = False
-        else:
-            deck1_active = False
-
-    deck1_metadata["active"] = deck1_active
-    deck2_metadata["active"] = deck2_active
+    # Add active status to each deck (both can be true if both are playing)
+    # Convert to Python bool to ensure JSON serialization works
+    deck1_metadata["active"] = bool(deck1_is_active)
+    deck2_metadata["active"] = bool(deck2_is_active)
     
     logger.info(f"Extracted metadata - Deck1: Title={deck1_metadata.get('title')}, Artist={deck1_metadata.get('artist')}, "
                 f"BPM={deck1_metadata.get('bpm')}, Key={deck1_metadata.get('key')}, Active={deck1_metadata.get('active')} | "

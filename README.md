@@ -192,16 +192,16 @@ Edit `djcap_processor.py` to change:
 - Install ocrmac: `pip install ocrmac`
 - Ensure you're on macOS (ocrmac requires macOS)
 
-### Active deck not detected / both decks inactive
-- The play-button detector looks for the neon green outline around the play button. If the outline coordinates drift (different resolution/layout), recalibrate using `tools/define_play_buttons.py` to update `data/region_coordinates.json` (`deck1_play_button` / `deck2_play_button`).
+### Active deck not detected / decks appear inactive
+- The play-button detector looks for the neon green outline around each deck play button. If your resolution/layout changes, recalibrate with `tools/define_play_buttons.py` to update `data/region_coordinates.json` (`deck1_play_button` / `deck2_play_button`).
 - After recalibration, restart `djcap.py` (and the frontend if running) so the new coordinates are picked up.
-- When both buttons appear green, the detector keeps only the primary deck active (`active_deck`) and marks the other deck inactive to avoid both decks showing `active: true`.
+- Both decks can be `active: true` if both are playing; `active_deck` is the primary display deck used by clients when needed.
 
-### Using local GIF/MP4 visuals instead of Giphy
-- External API calls were removed; visuals now come from local files in `/Users/youssefkhalil/Desktop/bank copy` (numbered `.mp4` files in the root of that folder).
-- Backend serves media at `/media/<filename>` and `/api/gifs` returns shuffled local entries while avoiding repeats (keeps a recent history window).
-- Frontend auto-advances visuals at the active deck’s BPM and avoids showing the same item again within the recent history window.
-- A minimal viewer page is available at `frontend/viewer.html` to display only the visuals at a responsive size (up to 1000px, maintaining aspect ratio and constrained by viewport).
+### `/api/theMood` errors (frontend)
+- The frontend server exposes:
+  - `GET /api/theMood`: lightweight “current mood” derived from the active deck’s enriched fields (no OpenAI calls).
+  - `POST /api/theMood`: Wikipedia-grounded theMood generation (requires OpenAI).
+- For `POST /api/theMood`, set `OPENAI_API_KEY` in the repo root `.env` (recommended) or export it in your shell.
 
 ### Poor OCR accuracy
 - Ensure djay Pro window is visible (not minimized)

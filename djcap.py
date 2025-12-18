@@ -67,19 +67,15 @@ def save_metadata_to_json(metadata: dict, output_file: str):
                     existing_deck.get('title') == new_deck.get('title') and
                     existing_deck.get('artist') == new_deck.get('artist')):
                     # Keep enriched fields from existing data
-                    for field in ['lastfm_tags', 'refined_keywords', 'keyword_scores', 
-                                 'key_characteristics', 'gifs', 'current_enriched', 'next_enriched']:
+                    for field in ['lastfm_tags', 'refined_keywords', 'keyword_scores',
+                                 'key_characteristics', 'gifs', 'current_enriched', 'next_enriched',
+                                 'lyrics_raw', 'lyrics_synced', 'lyrics_source', 'lyrics_track_started_at',
+                                 'lyrics_keywords']:
                         if field in existing_deck:
                             new_deck[field] = existing_deck[field]
                     # Preserve transition state for the same active track
                     if 'transition' in existing_deck:
                         new_deck['transition'] = existing_deck['transition']
-
-        # If neither deck is marked active, keep previous active_deck to avoid flapping
-        if (not metadata.get('deck1', {}).get('active') and
-            not metadata.get('deck2', {}).get('active') and
-            'active_deck' in existing_data):
-            metadata['active_deck'] = existing_data.get('active_deck', metadata.get('active_deck'))
         
         # Add timestamp
         metadata["timestamp"] = datetime.now().isoformat()

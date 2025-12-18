@@ -43,6 +43,35 @@
             border-radius: 12px;
             font-size: 12px;
         }
+        .lyrics-panel {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 12px 16px 14px;
+            background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 30%, rgba(0,0,0,0.8) 100%);
+        }
+        .lyrics-title {
+            font-size: 12px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #cbd5e1;
+            margin-bottom: 6px;
+        }
+        .lyrics-lines {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .lyric-line {
+            font-size: 15px;
+            line-height: 1.4;
+            color: #e2e8f0;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
     </style>
 </head>
 <body>
@@ -65,6 +94,15 @@
              :alt="currentGifTitle"
              @error="handleImageError"
              @load="onGifLoad">
+
+        <div class="lyrics-panel" v-if="lyricsPreview && lyricsPreview.length">
+            <div class="lyrics-title">Lyrics</div>
+            <div class="lyrics-lines">
+                <div v-for="(line, idx) in lyricsPreview" :key="idx" class="lyric-line">
+                    {{ line }}
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -127,6 +165,22 @@ createApp({
         },
         currentGifTitle() {
             return this.currentGif?.title || 'GIF';
+        },
+        lyricsPreview() {
+            const deck = this.activeDeckData;
+            if (!deck) return [];
+
+            // Prefer synced lines if present
+            if (deck.lyrics_synced && Array.isArray(deck.lyrics_synced) && deck.lyrics_synced.length > 0) {
+                return deck.lyrics_synced.slice(0, 4).map(entry => entry.line).filter(Boolean);
+            }
+
+            // Fallback to raw lyrics, first few lines
+            if (deck.lyrics_raw) {
+                return String(deck.lyrics_raw).split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 4);
+            }
+
+            return [];
         }
     },
     mounted() {
@@ -244,4 +298,6 @@ createApp({
 </script>
 </body>
 </html>
+
+
 

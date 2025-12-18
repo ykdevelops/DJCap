@@ -22,7 +22,7 @@ if os.path.exists(AUDIOAPIS_PATH):
 
 try:
     from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+    from watchdog.events import FileSystemEventHandler
     WATCHDOG_AVAILABLE = True
 except ImportError:
     WATCHDOG_AVAILABLE = False
@@ -496,18 +496,41 @@ def process_metadata_update(file_path: str):
 
 class DjcapJsonHandler(FileSystemEventHandler):
     """File system event handler for djcap_output.json changes."""
-    
+
+    def _maybe_process(self, path: str, event_name: str):
+        """
+        Process events that affect the target JSON file.
+
+        Note: `djcap.py` writes atomically (tmp file + rename), which can show up as
+        moved/created events rather than a pure "modified" on some platforms/backends.
+        """
+        if not path:
+            return
+        if os.path.abspath(path) != os.path.abspath(DJCAP_JSON_FILE):
+            return
+
+        logger.info(f"File {event_name} detected: {path}")
+        # Small delay to ensure atomic rename/write is complete
+        time.sleep(0.1)
+        process_metadata_update(DJCAP_JSON_FILE)
+
     def on_modified(self, event):
         """Handle file modification events."""
         if event.is_directory:
             return
-        
-        # Only process djcap_output.json
-        if event.src_path == DJCAP_JSON_FILE:
-            logger.info(f"File modified detected: {event.src_path}")
-            # Use a small delay to ensure file write is complete
-            time.sleep(0.1)
-            process_metadata_update(event.src_path)
+        self._maybe_process(getattr(event, "src_path", None), "modified")
+
+    def on_created(self, event):
+        """Handle file creation events (can occur with atomic writes)."""
+        if event.is_directory:
+            return
+        self._maybe_process(getattr(event, "src_path", None), "created")
+
+    def on_moved(self, event):
+        """Handle file move/rename events (common for atomic writes: tmp -> final)."""
+        if event.is_directory:
+            return
+        self._maybe_process(getattr(event, "dest_path", None), "moved")
 
 
 def main():

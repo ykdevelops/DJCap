@@ -10,8 +10,15 @@ from pathlib import Path
 # Try to load from .env file
 try:
     from dotenv import load_dotenv
-    env_path = Path(__file__).parent / '.env'
-    load_dotenv(env_path)
+    # Prefer repo root `.env` (per README), but keep `src/.env` as a fallback.
+    # This makes local dev less surprising and preserves backwards compatibility.
+    repo_root_env = Path(__file__).resolve().parent.parent / ".env"
+    src_env = Path(__file__).resolve().parent / ".env"
+
+    if repo_root_env.exists():
+        load_dotenv(repo_root_env)
+    elif src_env.exists():
+        load_dotenv(src_env)
 except ImportError:
     # python-dotenv not installed, will use environment variables only
     pass

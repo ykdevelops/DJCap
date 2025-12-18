@@ -136,9 +136,8 @@
 
         .gif-display-container {
             position: relative;
-            width: min(100vw - 40px, 1000px);
-            max-width: 1000px;
-            max-height: 1000px;
+            width: 100%;
+            max-width: 600px;
             margin: 0 auto;
             aspect-ratio: 16 / 9;
             border-radius: 15px;
@@ -293,53 +292,57 @@
                     </div>
                 </div>
 
-                <!-- GIF Search Preview (inspired by AudioApis App.vue) -->
-                <div class="card" v-if="activeDeckData">
-                    <h2>🎬 GIF Search Preview</h2>
-                    <div class="tags-section">
-                        <h3 style="margin-top: 10px; margin-bottom: 10px; color: #667eea;">Search Keywords</h3>
-                        <div class="tags">
-                            <span v-for="keyword in gifKeywords"
-                                  :key="keyword"
-                                  class="tag keyword">
-                                "{{ keyword }}"
-                            </span>
-                        </div>
-                    </div>
-                    <div class="tags-section" style="margin-top: 15px;">
-                        <p style="color: #4ec9b0; font-weight: 600;">
-                            Found {{ gifCount }} GIF{{ gifCount === 1 ? '' : 's' }} for this track
-                        </p>
-                    </div>
-                </div>
-
-                <!-- GIFs Card -->
                 <div class="card">
-                    <h2>🎬 Visuals</h2>
-                    <div v-if="gifCount > 0" class="gifs-section">
-                        <div class="gif-display-container">
-                            <video v-if="currentGifVideoUrl"
-                                   class="gif-image"
-                                   :src="currentGifVideoUrl"
-                                   :poster="currentGifUrl"
-                                   playsinline
-                                   muted
-                                   preload="auto"
-                                   @loadedmetadata="onVideoLoaded"
-                                   @error="handleImageError"
-                                   @ended="onVideoEnded"
-                                   autoplay></video>
-                            <img v-else
-                                 :src="currentGifUrl" 
-                                 :alt="currentGifTitle"
-                                 class="gif-image"
-                                 @error="handleImageError"
-                                 @load="onGifLoad">
+                    <h2>🧠 Keywords + theMood (Wikipedia)</h2>
+
+                    <div v-if="theMoodLoading" class="empty-state">
+                        <div class="empty-state-icon">⏳</div>
+                        <p>Fetching Wikipedia mood…</p>
+                    </div>
+
+                    <div v-else-if="theMoodError" class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <p>{{ theMoodError }}</p>
+                    </div>
+
+                    <div v-else-if="theMoodData && theMoodData.theMood">
+                        <div class="metadata-grid" style="grid-template-columns: 1fr;">
+                            <div class="metadata-item">
+                                <div class="metadata-label">Label</div>
+                                <div class="metadata-value">{{ theMoodData.theMood.label }}</div>
+                            </div>
+                            <div class="metadata-item" v-if="theMoodData.genres && theMoodData.genres.length">
+                                <div class="metadata-label">Genres</div>
+                                <div class="metadata-value">{{ theMoodData.genres.join(', ') }}</div>
+                            </div>
+                            <div class="metadata-item">
+                                <div class="metadata-label">Scene</div>
+                                <div class="metadata-value">{{ theMoodData.theMood.scene }}</div>
+                            </div>
+                        </div>
+
+                        <div class="tags-section" v-if="theMoodData.theMood.keywords && theMoodData.theMood.keywords.length">
+                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Keywords</h3>
+                            <div class="tags">
+                                <span v-for="kw in theMoodData.theMood.keywords" :key="kw" class="tag keyword">
+                                    {{ kw }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="tags-section" v-if="theMoodData.theMood.evidence_phrases && theMoodData.theMood.evidence_phrases.length">
+                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #d32f2f;">OpenAI response (grounded in Wikipedia)</h3>
+                            <div class="tags">
+                                <span v-for="ev in theMoodData.theMood.evidence_phrases" :key="ev" class="tag lastfm">
+                                    {{ ev }}
+                                </span>
+                            </div>
                         </div>
                     </div>
+
                     <div v-else class="empty-state">
-                        <div class="empty-state-icon">🎭</div>
-                        <p>No GIFs available yet. Waiting for track data...</p>
+                        <div class="empty-state-icon">🗞️</div>
+                        <p>Waiting for an active track to fetch theMood…</p>
                     </div>
                 </div>
             </div>
@@ -379,66 +382,47 @@
                     enrichedData: null,
                     isConnected: false,
                     pollInterval: null,
-                    gifTimeoutId: null,
-                    currentGifIndex: 0,
                     lastTrackId: null,
-                    gifs: [],
-                    gifKeywords: [],
-                    lastGifTrackId: null,
-                    lastGifFetchAt: 0,
-                    lastGifKeywordsSig: '',
-                    recentGifIds: [],
-                    maxRecentGifHistory: 100,
-                    gifFetchLimit: 5,
-                    gifRefreshMs: 10000,
-                    activeVideoRef: null,
-                    gifPlaybackRateBase: 120,
-                    gifFallbackDurationMs: 2000
+                    theMoodData: null,
+                    theMoodLoading: false,
+                    theMoodError: null,
+                    lastTheMoodTrackId: null,
+                    lastTheMoodAttemptAt: 0,
+                    lastTheMoodErrorAt: 0
                 };
             },
             computed: {
-                activeDeckName() {
-                    if (!this.enrichedData) return null;
-                    const fromActiveField = this.enrichedData.active_deck;
-                    if (fromActiveField && this.enrichedData[fromActiveField]) {
-                        return fromActiveField;
-                    }
-                    if (this.getDeckActive('deck1') && this.enrichedData.deck1) return 'deck1';
-                    if (this.getDeckActive('deck2') && this.enrichedData.deck2) return 'deck2';
-                    if (this.enrichedData.deck1) return 'deck1';
-                    if (this.enrichedData.deck2) return 'deck2';
-                    return null;
-                },
                 activeDeckData() {
-                    if (!this.enrichedData || !this.activeDeckName) return null;
-                    return this.enrichedData[this.activeDeckName] || null;
-                },
-                gifCount() {
-                    return this.gifs ? this.gifs.length : 0;
-                },
-                currentGif() {
-                    if (!this.gifs || this.gifs.length === 0) return null;
-                    return this.gifs[this.currentGifIndex % this.gifs.length];
-                },
-                currentGifUrl() {
-                    if (!this.currentGif) return '';
-                    return this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
-                },
-                currentGifVideoUrl() {
-                    if (!this.currentGif) return '';
-                    const url = this.currentGif.url || '';
-                    const mime = (this.currentGif.mime || '').toLowerCase();
-                    if (mime.startsWith('video/') || url.toLowerCase().endswith('.mp4')) {
-                        return url;
+                    // Get data from the active deck (or first active deck if both are active)
+                    if (!this.enrichedData) return null;
+                    
+                    let deckData = null;
+                    
+                    // Check deck1 first
+                    if (this.getDeckActive('deck1') && this.enrichedData.deck1) {
+                        deckData = this.enrichedData.deck1;
                     }
-                    return this.currentGif.images?.original_mp4?.mp4 ||
-                           this.currentGif.images?.downsized_medium?.mp4 ||
-                           this.currentGif.images?.preview_mp4?.mp4 ||
-                           this.currentGif.images?.fixed_height?.mp4 ||
-                           '';
+                    // Then check deck2
+                    else if (this.getDeckActive('deck2') && this.enrichedData.deck2) {
+                        deckData = this.enrichedData.deck2;
+                    }
+                    // Fallback to active_deck field
+                    else {
+                        const activeDeck = this.enrichedData.active_deck;
+                        if (activeDeck && this.enrichedData[activeDeck]) {
+                            deckData = this.enrichedData[activeDeck];
+                        }
+                    }
+                    
+                    if (!deckData) return null;
+                    
+                    // Return the deck data as-is - it may have current_enriched nested inside
+                    return deckData;
                 },
-                currentGifTitle() {
-                    return this.currentGif?.title || 'GIF';
+                activeTrackId() {
+                    const d = this.activeDeckData;
+                    if (!d || !d.title || !d.artist) return null;
+                    return `${d.title}|${d.artist}`;
                 }
             },
             mounted() {
@@ -452,81 +436,73 @@
                 if (this.pollInterval) {
                     clearInterval(this.pollInterval);
                 }
-                if (this.gifTimeoutId) {
-                    clearTimeout(this.gifTimeoutId);
-                }
             },
             methods: {
                 debugState() {
                     console.log('enrichedData:', this.enrichedData);
                     console.log('activeDeckData:', this.activeDeckData);
-                    console.log('gifKeywords:', this.gifKeywords);
-                    console.log('gifCount:', this.gifCount);
-                    console.log('currentGif:', this.currentGif);
-                    console.log('currentGifUrl:', this.currentGifUrl);
+                    console.log('theMoodData:', this.theMoodData);
+                    console.log('theMoodLoading:', this.theMoodLoading);
+                    console.log('theMoodError:', this.theMoodError);
                 },
-                async fetchGifsForActiveDeck() {
-                    // Fetch local GIF/MP4 assets from backend (no external API)
+                async fetchTheMoodForActiveDeck() {
                     const deck = this.activeDeckData;
                     if (!deck || !deck.title || !deck.artist) {
-                        this.gifs = [];
-                        this.gifKeywords = [];
-                        this.lastGifTrackId = null;
-                        this.lastGifKeywordsSig = '';
-                        this.resetGifTimers();
+                        this.theMoodData = null;
+                        this.theMoodError = null;
+                        this.theMoodLoading = false;
+                        this.lastTheMoodTrackId = null;
+                        this.lastTheMoodAttemptAt = 0;
+                        this.lastTheMoodErrorAt = 0;
                         return;
                     }
 
-                    // Build a signature from deck data to trigger refetch
-                    const keywords = [];
-                    if (deck.title) keywords.push(String(deck.title));
-                    if (deck.artist) keywords.push(String(deck.artist));
-                    if (deck.key) keywords.push(String(deck.key));
-                    const keywordsSig = keywords.join('||');
+                    const trackId = `${deck.title}|${deck.artist}`;
+                    if (this.lastTheMoodTrackId === trackId && this.theMoodData) {
+                        return;
+                    }
 
-                    const trackId = `${this.activeDeckName || 'deck'}|${deck.title}|${deck.artist}|${deck.key || ''}`;
+                    // Don't spam: if we're already fetching, or we recently errored, back off.
+                    if (this.theMoodLoading) return;
                     const now = Date.now();
-                    const trackChanged = this.lastGifTrackId !== trackId;
-                    const keywordsChanged = this.lastGifKeywordsSig !== keywordsSig;
-                    const stale = (now - this.lastGifFetchAt) >= this.gifRefreshMs;
-
-                    if (!trackChanged && !keywordsChanged && !stale && this.gifs && this.gifs.length > 0) {
-                        // Already have recent GIFs for this track/keywords
-                        return;
+                    if (this.lastTheMoodErrorAt && (now - this.lastTheMoodErrorAt) < 30000) {
+                        return; // 30s cooldown after an error
+                    }
+                    if (this.lastTheMoodAttemptAt && (now - this.lastTheMoodAttemptAt) < 2000) {
+                        return; // avoid duplicate calls within the polling window
                     }
 
-                    if (trackChanged || keywordsChanged) {
-                        this.lastGifFetchAt = 0;
-                    }
-
+                    this.theMoodLoading = true;
+                    this.theMoodError = null;
+                    this.lastTheMoodAttemptAt = now;
                     try {
-                        const resp = await fetch(`/api/gifs?deck=active&limit=${this.gifFetchLimit}`, {
-                            method: 'GET',
+                        const resp = await fetch('/api/theMood', {
+                            method: 'POST',
                             headers: {
+                                'Content-Type': 'application/json',
                                 'Accept': 'application/json',
                             },
-                            cache: 'no-cache'
+                            cache: 'no-cache',
+                            body: JSON.stringify({
+                                artist: String(deck.artist),
+                                title: String(deck.title),
+                                max_keywords: 18,
+                                max_scene_sentences: 2
+                            })
                         });
-                        if (resp.ok) {
-                            const data = await resp.json();
-                            const allGifs = data.gifs || [];
-                            const filtered = allGifs.filter(g => g?.id && !this.recentGifIds.includes(g.id));
-                            const selected = filtered.length > 0 ? filtered : allGifs;
-                            const shuffled = this.shuffleArray(selected.slice());
-                            this.gifs = shuffled;
-                            this.gifKeywords = data.keywords || [];
-                            this.lastGifTrackId = trackId;
-                            this.lastGifFetchAt = Date.now();
-                            this.lastGifKeywordsSig = keywordsSig;
-
-                            // Reset playback for new gifs
-                            this.currentGifIndex = 0;
-                            this.resetGifTimers();
-                        } else {
-                            console.error('Error fetching gifs:', resp.status, resp.statusText);
+                        if (!resp.ok) {
+                            const txt = await resp.text();
+                            throw new Error(`theMood error ${resp.status}: ${txt}`);
                         }
+                        this.theMoodData = await resp.json();
+                        this.lastTheMoodTrackId = trackId;
                     } catch (err) {
-                        console.error('Error fetching gifs:', err);
+                        this.theMoodError = String(err?.message || err);
+                        this.theMoodData = null;
+                        this.lastTheMoodTrackId = null;
+                        this.lastTheMoodErrorAt = Date.now();
+                    } finally {
+                        this.theMoodLoading = false;
                     }
                 },
                 async fetchData() {
@@ -546,8 +522,8 @@
                             this.enrichedData = data;
                             this.isConnected = true;
 
-                            // Fetch GIFs based only on deck data (title, artist, key)
-                            await this.fetchGifsForActiveDeck();
+                            // Fetch Wikipedia/OpenAI theMood based only on deck data (title, artist)
+                            await this.fetchTheMoodForActiveDeck();
 
                             // Log current state after each successful fetch
                             this.debugState();
@@ -573,32 +549,6 @@
                     // Hide broken images
                     event.target.style.display = 'none';
                 },
-                resetGifTimers() {
-                    if (this.gifTimeoutId) {
-                        clearTimeout(this.gifTimeoutId);
-                        this.gifTimeoutId = null;
-                    }
-                    this.activeVideoRef = null;
-                },
-                advanceGif() {
-                    if (!this.activeDeckData || this.gifCount === 0) return;
-                    const current = this.currentGif;
-                    if (current && current.id) {
-                        this.recentGifIds.push(current.id);
-                        if (this.recentGifIds.length > this.maxRecentGifHistory) {
-                            this.recentGifIds.splice(0, this.recentGifIds.length - this.maxRecentGifHistory);
-                        }
-                    }
-                    this.resetGifTimers();
-                    this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
-                },
-                shuffleArray(arr) {
-                    for (let i = arr.length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [arr[i], arr[j]] = [arr[j], arr[i]];
-                    }
-                    return arr;
-                },
                 getDeckActive(deckName) {
                     // Check if deck is active from djcap_output.json (now contains all data)
                     if (this.enrichedData && this.enrichedData[deckName]) {
@@ -610,29 +560,7 @@
                     // Fallback to active_deck field
                     return this.enrichedData && this.enrichedData.active_deck === deckName;
                 },
-                onGifLoad() {
-                    // Fallback for GIFs without video: schedule advance based on BPM
-                    const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
-                    const bpmFactor = bpm / this.gifPlaybackRateBase;
-                    const duration = Math.max(500, this.gifFallbackDurationMs / bpmFactor);
-                    this.resetGifTimers();
-                    this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
-                },
-                onVideoLoaded(event) {
-                    const video = event.target;
-                    this.activeVideoRef = video;
-                    const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
-                    const rate = bpm / this.gifPlaybackRateBase;
-                    video.playbackRate = rate;
-                    video.currentTime = 0;
-                    video.loop = false;
-                    video.muted = true;
-                    this.resetGifTimers();
-                    video.play().catch(() => {});
-                },
-                onVideoEnded() {
-                    this.advanceGif();
-                }
+                // GIF methods removed (Visuals / GIF Search Preview removed)
             }
         }).mount('#app');
     </script>
