@@ -128,6 +128,7 @@ def _fetch_gifs_direct(query: str, limit: int = 25) -> List[Dict[str, Any]]:
 
 from src.key_translator import translate_key_to_characteristics
 from src.output_cleanup import cleanup_output_folder
+from src.dance_video_bank import get_dance_videos
 
 # Configuration: Set to False to skip API calls entirely (faster, no external dependencies)
 USE_LASTFM_API = False  # Set to False to skip Last.fm API calls
@@ -231,7 +232,7 @@ def _clean_title_for_giphy(title: Optional[str]) -> Optional[str]:
 def _build_giphy_query_parts(title: Optional[str], artist: Optional[str]) -> List[str]:
     """
     Build the Giphy search "keywords" list.
-
+    
     Policy: artist-only search (no title) to keep results broad and consistent.
     """
     if not artist:
@@ -546,17 +547,26 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     # #region agent log
     _debug_log("djcap_processor.py:enrich_deck_data", "Checking existing GIFs", {"existing_query": existing_query, "existing_gifs_count": len(existing_gifs) if isinstance(existing_gifs, list) else 0, "query_match": existing_query == query}, "J")
     # #endregion
+    should_reuse = False
     if isinstance(existing_gifs, list) and existing_gifs and existing_query and existing_query == query:
-        gifs = existing_gifs[:GIPHY_GIFS_PER_TRACK]
-        if isinstance(existing_pool, list) and existing_pool:
-            gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
+        # When reusing, we need to extract only GIFs (not videos) from the interleaved list
+        # Filter out videos (items with mime='video/mp4' or source='dance_mp4_bank')
+        gif_only_list = [g for g in existing_gifs if g.get('mime') != 'video/mp4' and g.get('source') != 'dance_mp4_bank']
+        if len(gif_only_list) >= GIPHY_GIFS_PER_TRACK:
+            gifs = gif_only_list[:GIPHY_GIFS_PER_TRACK]
+            if isinstance(existing_pool, list) and existing_pool:
+                gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
+            else:
+                gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
+            # #region agent log
+            _debug_log("djcap_processor.py:enrich_deck_data", "Reusing existing GIFs", {"gifs_count": len(gifs)}, "J")
+            # #endregion
+            logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)})")
+            should_reuse = True
         else:
-            gif_pool = _dedupe_gif_list(existing_gifs)[:GIPHY_FETCH_POOL_SIZE]
-        # #region agent log
-        _debug_log("djcap_processor.py:enrich_deck_data", "Reusing existing GIFs", {"gifs_count": len(gifs)}, "J")
-        # #endregion
-        logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)})")
-    elif USE_GIPHY_API and GIPHY_API_KEY and search_keywords:
+            logger.info(f"Not enough GIFs in existing list ({len(gif_only_list)}), will fetch new ones")
+    
+    if not should_reuse and USE_GIPHY_API and GIPHY_API_KEY and search_keywords:
         try:
             # Try AudioApis first if available, otherwise use direct implementation
             if METADATA_MODULES_AVAILABLE:
@@ -603,6 +613,29 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
         _debug_log("djcap_processor.py:enrich_deck_data", "No GIFs fetched from Giphy API", {"search_keywords": search_keywords}, "J")
         # #endregion
         logger.info(f"No GIFs available for keywords: {search_keywords}")
+    
+    # Get 5 dance videos from offline bank and interleave with GIFs
+    dance_videos = get_dance_videos(count=5)
+    logger.info(f"Dance video bank: selected {len(dance_videos)} videos")
+    
+    # Interleave GIFs and videos: GIF, video, GIF, video, etc. (videos on even positions: 2, 4, 6, 8, 10)
+    # Ensure we have exactly 5 GIFs and 5 videos for a total of 10 items
+    gifs_final = gifs[:5]  # Take first 5 GIFs
+    videos_final = dance_videos[:5]  # Take first 5 videos
+    
+    # Interleave: create list with pattern [GIF, video, GIF, video, ...] (videos on even positions: 2, 4, 6, 8, 10)
+    interleaved: List[Dict[str, Any]] = []
+    max_len = max(len(gifs_final), len(videos_final))
+    for i in range(max_len):
+        # Add GIF first (odd positions: 1, 3, 5, 7, 9)
+        if i < len(gifs_final):
+            interleaved.append(gifs_final[i])
+        # Add video second (even positions: 2, 4, 6, 8, 10)
+        if i < len(videos_final):
+            interleaved.append(videos_final[i])
+    
+    gifs = interleaved
+    logger.info(f"Interleaved media: {len(gifs)} total items ({len(gifs_final)} GIFs + {len(videos_final)} videos)")
     
     # Create enriched deck data - only copy basic fields to avoid recursive structures
     # Do NOT copy current_enriched, next_enriched, or other nested structures

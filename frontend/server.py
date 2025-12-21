@@ -38,6 +38,9 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
         # API endpoint for output JSON (now contains all enriched data)
         if parsed_path.path == '/api/enriched':
             self.serve_output_json()
+        # API endpoint for dance videos
+        elif parsed_path.path.startswith('/api/dance_video/'):
+            self.serve_dance_video(parsed_path.path.replace('/api/dance_video/', ''))
         else:
             # Serve static files
             super().do_GET()
@@ -68,6 +71,35 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+
+    def serve_dance_video(self, filename: str):
+        """Serve dance video files from the dance_mp4_bank folder."""
+        try:
+            # Security: only allow .mp4 files and prevent directory traversal
+            if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
+                self.send_response(400)
+                self.end_headers()
+                return
+            
+            video_path = Path(__file__).parent.parent / "data" / "dance_mp4_bank" / filename
+            
+            if not video_path.exists() or not video_path.is_file():
+                self.send_response(404)
+                self.end_headers()
+                return
+            
+            # Serve the video file
+            self.send_response(200)
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'public, max-age=3600')
+            self.end_headers()
+            
+            with open(video_path, 'rb') as f:
+                self.wfile.write(f.read())
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
 
     def log_message(self, format, *args):
         """Override to reduce log noise."""

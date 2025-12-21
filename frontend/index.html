@@ -150,15 +150,6 @@
             width: 100%;
             height: 100%;
             object-fit: contain;
-            transition: opacity 0.5s ease-in-out;
-        }
-
-        .gif-image.fade-out {
-            opacity: 0;
-        }
-
-        .gif-image.fade-in {
-            opacity: 1;
         }
 
         .gif-counter {
@@ -325,9 +316,20 @@
                     <h2>🎬 Visuals</h2>
                     <div v-if="gifCount > 0" class="gifs-section">
                         <div class="gif-display-container">
-                            <img :src="currentGifUrl" 
+                            <video v-if="currentGifVideoUrl"
+                                   :src="currentGifVideoUrl"
+                                   :poster="currentGifUrl"
+                                   playsinline
+                                   muted
+                                   preload="auto"
+                                   class="gif-image"
+                                   @loadedmetadata="onVideoLoaded"
+                                   @ended="onVideoEnded"
+                                   autoplay></video>
+                            <img v-else
+                                 :src="currentGifUrl" 
                                  :alt="currentGifTitle"
-                                 :class="['gif-image', gifTransitionClass]"
+                                 class="gif-image"
                                  @error="handleImageError"
                                  @load="onGifLoad">
                             <div class="gif-counter" v-if="gifCount > 1">
@@ -409,13 +411,14 @@
                     pollInterval: null,
                     gifCycleInterval: null,
                     currentGifIndex: 0,
-                    gifTransitionClass: 'fade-in',
                     lastTrackId: null,
                     gifs: [],
                     gifPool: [],
                     bannedGifIds: [],
                     gifKeywords: [],
-                    lastGifTrackId: null
+                    lastGifTrackId: null,
+                    activeVideoRef: null,
+                    gifTimeoutId: null
                 };
             },
             computed: {
@@ -458,6 +461,13 @@
                     // Giphy API returns url directly, but also check for images.downsized.url for compatibility
                     return this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
                 },
+                currentGifVideoUrl() {
+                    if (!this.currentGif) return '';
+                    const url = (this.currentGif.url || '').toLowerCase();
+                    const mime = (this.currentGif.mime || '').toLowerCase();
+                    if (mime.startsWith('video/') || url.endsWith('.mp4')) return this.currentGif.url;
+                    return '';
+                },
                 currentGifTitle() {
                     return this.currentGif?.title || 'GIF';
                 }
@@ -470,6 +480,26 @@
                 }, 2000);
                 // Start GIF cycling
                 this.startGifCycle();
+            },
+            watch: {
+                // Update video playback rate when BPM changes
+                'activeDeckData.bpm'(newBpm, oldBpm) {
+                    if (newBpm && newBpm !== oldBpm && this.currentGifVideoUrl) {
+                        this.updateVideoPlaybackRate();
+                    }
+                },
+                // Update video playback rate when video changes
+                currentGifVideoUrl(newUrl) {
+                    if (newUrl) {
+                        // Wait for video to load, then update rate
+                        this.$nextTick(() => {
+                            const video = document.querySelector('video');
+                            if (video && video.readyState >= 2) {
+                                this.updateVideoPlaybackRate();
+                            }
+                        });
+                    }
+                }
             },
             beforeUnmount() {
                 if (this.pollInterval) {
@@ -632,8 +662,6 @@
                     if (trackId !== this.lastTrackId) {
                         this.currentGifIndex = 0;
                         this.lastTrackId = trackId;
-                        // Reset transition class for new track
-                        this.gifTransitionClass = 'fade-in';
                     }
                     
                     // Only start cycling if we have more than 1 GIF
@@ -649,19 +677,48 @@
                         return;
                     }
                     
-                    // Fade out current GIF
-                    this.gifTransitionClass = 'fade-out';
-                    
-                    // After fade, switch to next GIF
-                    setTimeout(() => {
-                        this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
-                        this.gifTransitionClass = 'fade-in';
-                    }, 500); // Half of transition duration
+                    // Direct clip-to-clip transition
+                    this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
                 },
                 onGifLoad() {
-                    // Ensure GIF is visible when loaded
-                    this.gifTransitionClass = 'fade-in';
-                }
+                    const bpm = this.activeDeckData?.bpm || 120;
+                    const bpmFactor = bpm / 120;
+                    const duration = Math.max(500, 2000 / bpmFactor);
+                    this.resetGifTimers();
+                    this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
+                },
+                resetGifTimers() {
+                    if (this.gifTimeoutId) {
+                        clearTimeout(this.gifTimeoutId);
+                        this.gifTimeoutId = null;
+                    }
+                    this.activeVideoRef = null;
+                },
+                updateVideoPlaybackRate() {
+                    // Try to get video from event if available, otherwise query DOM
+                    const video = this.activeVideoRef || document.querySelector('video');
+                    if (!video) return;
+                    const bpm = this.activeDeckData?.bpm || 120;
+                    const rate = Math.max(0.25, Math.min(4.0, bpm / 120)); // Clamp rate between 0.25x and 4.0x
+                    video.playbackRate = rate;
+                    console.log(`Video playback rate updated to ${rate.toFixed(2)}x for BPM ${bpm}`);
+                },
+                onVideoLoaded(event) {
+                    const video = event.target;
+                    this.activeVideoRef = video; // Store reference for rate updates
+                    const bpm = this.activeDeckData?.bpm || 120;
+                    const rate = Math.max(0.25, Math.min(4.0, bpm / 120)); // Clamp rate between 0.25x and 4.0x
+                    video.playbackRate = rate;
+                    video.currentTime = 0;
+                    video.loop = false;
+                    video.muted = true;
+                    this.resetGifTimers();
+                    console.log(`Video loaded, playback rate set to ${rate.toFixed(2)}x for BPM ${bpm}`);
+                    video.play().catch(() => {});
+                },
+                onVideoEnded() {
+                    this.advanceGif();
+                },
             }
         }).mount('#app');
     </script>

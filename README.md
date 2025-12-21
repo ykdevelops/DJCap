@@ -10,10 +10,16 @@ AudioGiphy is a real-time DJ metadata capture and visualization system that cont
 - **Apple Vision OCR**: Uses native macOS OCR (via `ocrmac`) for accurate text extraction
 - **Continuous monitoring**: Updates JSON file every few seconds with real-time track metadata
 - **Metadata enrichment**: Automatically enriches tracks with Last.fm tags, keywords, and musical key characteristics
-- **GIF integration**: Fetches and manages Giphy GIFs based on artist and track metadata
+- **GIF integration**: Fetches and manages Giphy GIFs based on artist metadata
+- **Dance video bank**: Integrates offline dance video library for visual variety
+- **Interleaved media rotation**: 10-item rotation (5 GIFs from Giphy + 5 videos from dance bank)
+- **BPM-synced video playback**: Videos automatically adjust playback rate to match track BPM
 - **Rate limiting**: Smart rate limiting for Giphy API to stay within limits
-- **Live web visualization**: Vue.js frontend for real-time visualization of tracks and GIFs
+- **Live web visualization**: Vue.js frontend for real-time visualization of tracks, GIFs, and videos
+- **Direct clip transitions**: Seamless clip-to-clip transitions without fade effects
+- **Auto-cleanup**: Automatic output folder cleanup to manage file sizes
 - **File watching friendly**: JSON file is written atomically for safe file watching
+- **Server management**: Convenient scripts to start/stop/restart all services
 
 ## Requirements
 
@@ -44,7 +50,9 @@ AudioGiphy/
 │   ├── metadata_extractor.py  # OCR and metadata extraction
 │   ├── config.py           # Configuration and API keys
 │   ├── gif_bank.py         # GIF bank management
-│   └── key_translator.py   # Musical key translation
+│   ├── dance_video_bank.py # Dance video bank management
+│   ├── key_translator.py   # Musical key translation
+│   └── output_cleanup.py   # Output folder cleanup utilities
 ├── tools/                  # Utility scripts
 │   ├── define_regions.py   # Interactive region definition tool
 │   ├── define_play_buttons.py  # Play button calibration
@@ -57,29 +65,61 @@ AudioGiphy/
 ├── data/                   # Data files
 │   ├── region_coordinates.json  # OCR region coordinates
 │   ├── gif_bank/          # GIF bank storage
+│   ├── dance_mp4_bank/    # Dance video bank (MP4 files)
 │   └── output/            # Output JSON files
 │       ├── djcap_output.json
 │       ├── giphy_history.json
 │       └── giphy_rate_state.json
 ├── djcap.py               # Main capture service
 ├── djcap_processor.py     # Metadata enrichment service
+├── start_servers.sh       # Start all services script
+├── stop_servers.sh        # Stop all services script
+├── restart_servers.sh     # Restart all services script
 └── requirements.txt       # Python dependencies
 ```
 
 ## Usage
 
-Run the main capture script:
+### Quick Start (All Services)
 
+Use the convenience scripts to manage all services:
+
+```bash
+# Start all services (djcap, processor, frontend)
+./start_servers.sh
+
+# Stop all services
+./stop_servers.sh
+
+# Restart all services
+./restart_servers.sh
+```
+
+### Manual Start
+
+Run services individually:
+
+1. **Capture service** (captures metadata from djay Pro):
 ```bash
 python djcap.py
 ```
 
-The script will:
+2. **Processor service** (enriches metadata with GIFs and videos):
+```bash
+python djcap_processor.py
+```
+
+3. **Frontend server** (web visualization):
+```bash
+python frontend/server.py
+```
+
+The capture script will:
 - Continuously capture the djay Pro window every 3 seconds
 - Extract metadata from both decks
 - Save results to `data/output/djcap_output.json`
 
-Press `Ctrl+C` to stop.
+Press `Ctrl+C` to stop individual services.
 
 ## Output Format
 
@@ -149,10 +189,20 @@ The processor will:
 - Write enriched data directly back to `data/output/djcap_output.json`
 - Inactive decks keep only basic metadata (title, artist, BPM, key, active)
 
+### Media Rotation (GIFs + Videos)
+
+- **Rotation size**: 10 items per track (5 GIFs + 5 videos)
+- **GIFs**: Fetched from Giphy API based on artist name
+- **Videos**: Randomly selected from offline dance video bank (`data/dance_mp4_bank/`)
+- **Interleaving**: Pattern alternates GIF, video, GIF, video, etc. (videos on even positions: 2, 4, 6, 8, 10)
+- **BPM sync**: Videos automatically adjust playback rate to match track BPM (rate = BPM / 120)
+- **Transitions**: Direct clip-to-clip transitions (no fade effects)
+
 ### GIF behavior (safe defaults)
 
 - **Search query**: artist-only (broad and consistent)
-- **Rotation size**: 5 GIFs per track (`gifs`)
+- **GIF pool**: 5 GIFs per track from Giphy API
+- **Video pool**: 5 videos per track from dance video bank
 - **Pool**: a larger per-track pool (`gif_pool`) is fetched once per track so the UI can replace disliked GIFs without extra API calls
 - **Rate limiting**: live Giphy calls are capped per rolling hour; state is saved to `data/output/giphy_rate_state.json`
 - **Repeat avoidance**: recently used GIF IDs are tracked per artist in `data/output/giphy_history.json`
@@ -237,7 +287,10 @@ Edit `djcap_processor.py` to change:
 - Both decks can be `active: true` if both are playing; `active_deck` is the primary display deck used by clients when needed.
 
 ### Frontend API notes
-- The frontend server exposes **`GET /api/enriched`** (serves `data/output/djcap_output.json`) and static HTML.
+- The frontend server exposes:
+  - **`GET /api/enriched`** - Serves `data/output/djcap_output.json`
+  - **`GET /api/dance_video/{filename}`** - Serves MP4 files from `data/dance_mp4_bank/`
+  - Static HTML files (index.html, viewer.html)
 - UI assets are served with **no-cache** headers to make local development updates show immediately.
 
 ### Poor OCR accuracy
@@ -306,8 +359,11 @@ The frontend will:
 - **Real-time Updates**: Automatically polls for new data every 2 seconds
 - **Track Information**: Shows title, artist, BPM, and key
 - **Tags & Keywords**: Displays Last.fm tags and refined keywords
-- **GIF Visuals**: Cycles through 5 GIFs for the current track
-- **Replace a GIF**: Click a numbered slot under the visuals to remove that GIF from rotation; it is replaced immediately from `gif_pool` (no extra API calls)
+- **Media Visuals**: Cycles through 10 items (5 GIFs + 5 videos) for the current track
+- **BPM-synced Playback**: Videos automatically adjust playback speed to match track BPM
+- **Direct Transitions**: Seamless clip-to-clip transitions without fade effects
+- **Replace Media**: Click a numbered slot under the visuals to remove that item from rotation; it is replaced immediately from `gif_pool` (no extra API calls)
+- **Video Support**: Automatically detects and plays MP4 videos from the dance video bank
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## License

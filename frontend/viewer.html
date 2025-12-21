@@ -228,6 +228,26 @@ createApp({
         this.fetchData();
         this.pollInterval = setInterval(() => this.fetchData(), 2000);
     },
+    watch: {
+        // Update video playback rate when BPM changes
+        'activeDeckData.bpm'(newBpm, oldBpm) {
+            if (newBpm && newBpm !== oldBpm && this.currentGifVideoUrl) {
+                this.updateVideoPlaybackRate();
+            }
+        },
+        // Update video playback rate when video changes
+        currentGifVideoUrl(newUrl) {
+            if (newUrl) {
+                // Wait for video to load, then update rate
+                this.$nextTick(() => {
+                    const video = document.querySelector('video');
+                    if (video && video.readyState >= 2) {
+                        this.updateVideoPlaybackRate();
+                    }
+                });
+            }
+        }
+    },
     beforeUnmount() {
         if (this.pollInterval) clearInterval(this.pollInterval);
         if (this.gifTimeoutId) clearTimeout(this.gifTimeoutId);
@@ -352,16 +372,28 @@ createApp({
             this.resetGifTimers();
             this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
         },
+        updateVideoPlaybackRate() {
+            if (!this.activeVideoRef) {
+                const video = document.querySelector('video');
+                if (video) this.activeVideoRef = video;
+                else return;
+            }
+            const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
+            const rate = Math.max(0.25, Math.min(4.0, bpm / this.gifPlaybackRateBase)); // Clamp rate between 0.25x and 4.0x
+            this.activeVideoRef.playbackRate = rate;
+            console.log(`Video playback rate updated to ${rate.toFixed(2)}x for BPM ${bpm}`);
+        },
         onVideoLoaded(event) {
             const video = event.target;
             this.activeVideoRef = video;
             const bpm = this.activeDeckData?.bpm || this.gifPlaybackRateBase;
-            const rate = bpm / this.gifPlaybackRateBase;
+            const rate = Math.max(0.25, Math.min(4.0, bpm / this.gifPlaybackRateBase)); // Clamp rate between 0.25x and 4.0x
             video.playbackRate = rate;
             video.currentTime = 0;
             video.loop = false;
             video.muted = true;
             this.resetGifTimers();
+            console.log(`Video loaded, playback rate set to ${rate.toFixed(2)}x for BPM ${bpm}`);
             video.play().catch(() => {});
         },
         onVideoEnded() { this.advanceGif(); }
