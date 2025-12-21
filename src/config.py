@@ -20,8 +20,24 @@ try:
     elif src_env.exists():
         load_dotenv(src_env)
 except ImportError:
-    # python-dotenv not installed, will use environment variables only
-    pass
+    # python-dotenv not installed, try manual .env parsing as fallback
+    repo_root_env = Path(__file__).resolve().parent.parent / ".env"
+    src_env = Path(__file__).resolve().parent / ".env"
+    
+    env_file = repo_root_env if repo_root_env.exists() else (src_env if src_env.exists() else None)
+    if env_file:
+        try:
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key and value:
+                            os.environ[key] = value
+        except Exception:
+            pass  # If manual parsing fails, continue without .env
 
 # Last.fm API credentials
 LASTFM_API_KEY = os.getenv('LASTFM_API_KEY', '')

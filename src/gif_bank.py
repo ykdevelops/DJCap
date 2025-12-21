@@ -104,9 +104,44 @@ def get_offline_gifs(keywords: List[str], limit: int) -> List[Dict[str, Any]]:
         )
         return selected
 
+    # No scored matches, try partial/fuzzy matching before falling back to random
+    # Try matching individual words from keywords
+    partial_matches = []
+    for gif in _GIF_BANK:
+        title = (gif.get("title") or "").lower()
+        tags = [t.lower() for t in gif.get("tags", []) if isinstance(t, str)]
+        all_text = " ".join([title] + tags).lower()
+        
+        # Check if any keyword word appears in the text
+        for kw in kw_lower:
+            kw_words = kw.split()
+            for kw_word in kw_words:
+                if len(kw_word) > 3 and kw_word in all_text:  # Only match words > 3 chars
+                    partial_matches.append(gif)
+                    break
+            if gif in partial_matches:
+                break
+    
+    if partial_matches:
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_matches = []
+        for gif in partial_matches:
+            gif_id = gif.get("id")
+            if gif_id and gif_id not in seen:
+                seen.add(gif_id)
+                unique_matches.append(gif)
+        
+        selected = unique_matches[:limit]
+        logger.info(
+            f"Offline GIF bank: no exact matches for {keywords}, "
+            f"returning {len(selected)} partial matches"
+        )
+        return selected
+    
     # No scored matches, fall back to random selection
     logger.info(
-        f"Offline GIF bank: no direct matches for {keywords}, "
+        f"Offline GIF bank: no matches for {keywords}, "
         f"returning random GIFs"
     )
     return random.sample(_GIF_BANK, min(limit, len(_GIF_BANK)))

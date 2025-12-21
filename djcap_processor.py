@@ -17,6 +17,25 @@ import re
 from collections import deque
 import random
 
+# #region agent log
+DEBUG_LOG_PATH = Path(__file__).parent / ".cursor" / "debug.log"
+def _debug_log(location, message, data, hypothesis_id):
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(DEBUG_LOG_PATH, 'a') as f:
+            log_entry = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000)
+            }
+            f.write(json.dumps(log_entry) + "\n")
+    except: pass
+# #endregion
+
 # Load API keys early (loads repo-root `.env` via python-dotenv).
 # Important: AudioApis `metadata.giphy_client` imports its own `config` module and reads
 # `GIPHY_API_KEY` at import time. If we import AudioApis first, it can cache an empty key.
@@ -47,8 +66,68 @@ except ImportError as e:
     METADATA_MODULES_AVAILABLE = False
     logging.warning(f"AudioApis metadata modules not available: {e}")
 
+# Direct Giphy API implementation (fallback when AudioApis not available)
+def _fetch_gifs_direct(query: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """
+    Direct Giphy API implementation that doesn't require AudioApis.
+    Returns list of GIF dicts with id, url, title, tags, etc.
+    """
+    if not GIPHY_API_KEY or not query:
+        return []
+    
+    try:
+        import urllib.request
+        import urllib.parse
+        
+        # Giphy Search API endpoint
+        base_url = "https://api.giphy.com/v1/gifs/search"
+        params = {
+            "api_key": GIPHY_API_KEY,
+            "q": query,
+            "limit": min(limit, 50),  # Giphy max is 50
+            "rating": "g",  # Safe for work
+            "lang": "en"
+        }
+        
+        url = f"{base_url}?{urllib.parse.urlencode(params)}"
+        
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_direct", "Fetching from Giphy API", {"query": query, "limit": limit, "url": url.replace(GIPHY_API_KEY, "***")}, "J")
+        # #endregion
+        
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            
+        gifs = []
+        if data.get("data"):
+            for item in data["data"]:
+                gif = {
+                    "id": item.get("id"),
+                    "url": item.get("images", {}).get("downsized", {}).get("url") or item.get("images", {}).get("fixed_height", {}).get("url") or "",
+                    "title": item.get("title", ""),
+                    "rating": item.get("rating", "g"),
+                    "source": item.get("source", ""),
+                    "width": item.get("images", {}).get("downsized", {}).get("width") or item.get("images", {}).get("fixed_height", {}).get("width") or 480,
+                    "height": item.get("images", {}).get("downsized", {}).get("height") or item.get("images", {}).get("fixed_height", {}).get("height") or 270,
+                    "tags": item.get("tags", [])
+                }
+                if gif["url"]:  # Only add if we have a valid URL
+                    gifs.append(gif)
+        
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_direct", "Giphy API response", {"gifs_count": len(gifs)}, "J")
+        # #endregion
+        
+        return gifs
+    except Exception as e:
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_direct", "Giphy API error", {"error": str(e), "error_type": type(e).__name__}, "J")
+        # #endregion
+        logger.warning(f"Error fetching GIFs directly from Giphy API: {e}")
+        return []
+
 from src.key_translator import translate_key_to_characteristics
-from src.gif_bank import get_offline_gifs
+from src.output_cleanup import cleanup_output_folder
 
 # Configuration: Set to False to skip API calls entirely (faster, no external dependencies)
 USE_LASTFM_API = False  # Set to False to skip Last.fm API calls
@@ -56,7 +135,7 @@ USE_GIPHY_API = True   # Enable live Giphy API calls for GIF fetching
 USE_KEYWORD_ANALYZER = False  # Set to False to skip keyword analyzer (use basic keywords: title, artist, key characteristics)
 
 # Offline / fallback GIF support
-USE_OFFLINE_GIF_BANK = True  # Use offline GIF bank when Giphy is disabled or returns no results
+USE_OFFLINE_GIF_BANK = False  # Disabled - use Giphy API only
 
 # Giphy API configuration
 # Fetch exactly N GIFs per track (safe default: 5)
@@ -285,9 +364,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-DJCAP_JSON_FILE = "/Users/youssefkhalil/DjCap/data/output/djcap_output.json"
+DJCAP_JSON_FILE = "/Users/youssefkhalil/AudioGiphy/data/output/djcap_output.json"
 DEBOUNCE_DELAY = 0.1  # seconds to wait after file change before processing
 RUNNING = True
+
+# Cleanup configuration
+CLEANUP_CHECK_INTERVAL = 100  # Check every N processing cycles
+OUTPUT_FOLDER = "/Users/youssefkhalil/AudioGiphy/data/output"
 
 # Track last processed file to avoid duplicates
 _last_processed_time = 0
@@ -366,7 +449,14 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Enriched deck data with additional fields (or basic data if inactive)
     """
+    # #region agent log
+    _debug_log("djcap_processor.py:enrich_deck_data", "Function entry", {"active": deck_data.get('active'), "title": deck_data.get('title'), "artist": deck_data.get('artist')}, "I")
+    # #endregion
+    
     if not deck_data.get('active', False):
+        # #region agent log
+        _debug_log("djcap_processor.py:enrich_deck_data", "Deck not active, returning basic data", {}, "I")
+        # #endregion
         # If deck is not active, return only basic metadata
         return {
             'deck': deck_data.get('deck'),
@@ -382,6 +472,9 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     bpm = deck_data.get('bpm')
     key = deck_data.get('key')
     
+    # #region agent log
+    _debug_log("djcap_processor.py:enrich_deck_data", "Enriching active deck", {"title": title, "artist": artist, "bpm": bpm, "key": key}, "I")
+    # #endregion
     logger.info(f"Enriching active deck: {title} - {artist}")
     
     # Build keyword collection
@@ -433,6 +526,10 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     query_parts: List[str] = _build_giphy_query_parts(title, artist)
     query = " ".join(query_parts).strip() if query_parts else None
 
+    # #region agent log
+    _debug_log("djcap_processor.py:enrich_deck_data", "Giphy query built", {"query_parts": query_parts, "query": query, "USE_GIPHY_API": USE_GIPHY_API, "METADATA_MODULES_AVAILABLE": METADATA_MODULES_AVAILABLE, "GIPHY_API_KEY": bool(GIPHY_API_KEY)}, "J")
+    # #endregion
+
     search_keywords: List[str] = [query] if query else []
     # Fetch a larger pool (still one request) so we can avoid reusing the same GIFs
     # for the same artist across consecutive tracks. Final output is still capped to 5.
@@ -446,57 +543,89 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     existing_query = deck_data.get("giphy_query")
     existing_gifs = deck_data.get("gifs")
     existing_pool = deck_data.get("gif_pool")
+    # #region agent log
+    _debug_log("djcap_processor.py:enrich_deck_data", "Checking existing GIFs", {"existing_query": existing_query, "existing_gifs_count": len(existing_gifs) if isinstance(existing_gifs, list) else 0, "query_match": existing_query == query}, "J")
+    # #endregion
     if isinstance(existing_gifs, list) and existing_gifs and existing_query and existing_query == query:
         gifs = existing_gifs[:GIPHY_GIFS_PER_TRACK]
         if isinstance(existing_pool, list) and existing_pool:
             gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
         else:
             gif_pool = _dedupe_gif_list(existing_gifs)[:GIPHY_FETCH_POOL_SIZE]
+        # #region agent log
+        _debug_log("djcap_processor.py:enrich_deck_data", "Reusing existing GIFs", {"gifs_count": len(gifs)}, "J")
+        # #endregion
         logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)})")
-    elif USE_GIPHY_API and METADATA_MODULES_AVAILABLE and GIPHY_API_KEY and search_keywords:
+    elif USE_GIPHY_API and GIPHY_API_KEY and search_keywords:
         try:
-            if not _giphy_can_request(cost=len(search_keywords)):
-                logger.warning(
-                    f"Giphy rate limit reached ({GIPHY_MAX_REQUESTS_PER_HOUR}/hour). "
-                    f"Skipping live Giphy for query={search_keywords} and using offline bank."
-                )
+            # Try AudioApis first if available, otherwise use direct implementation
+            if METADATA_MODULES_AVAILABLE:
+                if not _giphy_can_request(cost=len(search_keywords)):
+                    logger.warning(
+                        f"Giphy rate limit reached ({GIPHY_MAX_REQUESTS_PER_HOUR}/hour). "
+                        f"Skipping live Giphy for query={search_keywords} and using offline bank."
+                    )
+                else:
+                    logger.info(f"Fetching GIF pool (limit={per_keyword_limit}) from Giphy via AudioApis for query: {search_keywords[0]}")
+                    _giphy_record_request(cost=len(search_keywords))
+                    gifs = fetch_gifs_for_keywords(search_keywords, limit_per_keyword=per_keyword_limit)
             else:
-                logger.info(f"Fetching GIF pool (limit={per_keyword_limit}) from Giphy for query: {search_keywords[0]}")
-                _giphy_record_request(cost=len(search_keywords))
-                gifs = fetch_gifs_for_keywords(search_keywords, limit_per_keyword=per_keyword_limit)
+                # Use direct Giphy API implementation
+                logger.info(f"Fetching GIF pool (limit={per_keyword_limit}) from Giphy API directly for query: {search_keywords[0]}")
+                gifs = _fetch_gifs_direct(search_keywords[0], limit=per_keyword_limit)
 
             # Build pool + select 5 (avoid repeats for same artist)
             gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
 
             # Select up to 5, avoiding recently used GIFs for the same artist.
             gifs = _filter_and_select_gifs_for_artist(artist, gif_pool)
+            # #region agent log
+            _debug_log("djcap_processor.py:enrich_deck_data", "Giphy API fetch complete", {"gifs_count": len(gifs), "gif_pool_size": len(gif_pool)}, "J")
+            # #endregion
             logger.info(f"Giphy API: selected {len(gifs)} GIFs for track (pool={per_keyword_limit})")
             if gifs:
                 first = gifs[0]
                 logger.info(f"Giphy API: first GIF sample id={first.get('id')}, url={first.get('url')}")
         except Exception as e:
+            # #region agent log
+            _debug_log("djcap_processor.py:enrich_deck_data", "Giphy API error", {"error": str(e), "error_type": type(e).__name__}, "J")
+            # #endregion
             logger.warning(f"Error fetching GIFs from Giphy (will try offline bank if enabled): {e}", exc_info=True)
     else:
+        # #region agent log
+        _debug_log("djcap_processor.py:enrich_deck_data", "Skipping Giphy API", {"USE_GIPHY_API": USE_GIPHY_API, "METADATA_MODULES_AVAILABLE": METADATA_MODULES_AVAILABLE, "has_api_key": bool(GIPHY_API_KEY), "has_search_keywords": bool(search_keywords)}, "J")
+        # #endregion
         logger.debug("Skipping live Giphy API (disabled or no API key)")
 
-    # Fallback / offline mode: use GIF bank if enabled and we still have no GIFs
-    if USE_OFFLINE_GIF_BANK and not gifs:
-        logger.info(f"Using offline GIF bank for keywords: {search_keywords}")
-        pool = get_offline_gifs(search_keywords, limit=GIPHY_FETCH_POOL_SIZE)
-        gif_pool = _dedupe_gif_list(pool)[:GIPHY_FETCH_POOL_SIZE]
-        gifs = _filter_and_select_gifs_for_artist(artist, gif_pool)
-        logger.info(f"Offline GIF bank: returned {len(gifs)} GIFs")
+    # Offline GIF bank disabled - only use Giphy API
+    if not gifs:
+        # #region agent log
+        _debug_log("djcap_processor.py:enrich_deck_data", "No GIFs fetched from Giphy API", {"search_keywords": search_keywords}, "J")
+        # #endregion
+        logger.info(f"No GIFs available for keywords: {search_keywords}")
     
-    # Add enriched fields to deck data
-    enriched_deck = deck_data.copy()
-    enriched_deck['lastfm_tags'] = lastfm_tags
-    enriched_deck['refined_keywords'] = refined_keywords
-    enriched_deck['keyword_scores'] = keyword_scores
-    enriched_deck['key_characteristics'] = key_characteristics
-    enriched_deck['gifs'] = gifs
-    enriched_deck['gif_pool'] = gif_pool
-    enriched_deck['giphy_query'] = query
-    enriched_deck['giphy_query_parts'] = query_parts[:2]
+    # Create enriched deck data - only copy basic fields to avoid recursive structures
+    # Do NOT copy current_enriched, next_enriched, or other nested structures
+    enriched_deck = {
+        'deck': deck_data.get('deck'),
+        'title': title,
+        'artist': artist,
+        'bpm': bpm,
+        'key': key,
+        'active': True,
+        'lastfm_tags': lastfm_tags,
+        'refined_keywords': refined_keywords,
+        'keyword_scores': keyword_scores,
+        'key_characteristics': key_characteristics,
+        'gifs': gifs,
+        'gif_pool': gif_pool,
+        'giphy_query': query,
+        'giphy_query_parts': query_parts[:2]
+    }
+    
+    # #region agent log
+    _debug_log("djcap_processor.py:enrich_deck_data", "Enrichment complete", {"gifs_count": len(gifs), "gif_pool_size": len(gif_pool), "refined_keywords_count": len(refined_keywords)}, "I")
+    # #endregion
     
     return enriched_deck
 
@@ -505,6 +634,9 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+# Track processing count for periodic cleanup
+_process_count = 0
+
 def process_metadata_update(file_path: str):
     """
     Process metadata update when JSON file changes.
@@ -512,7 +644,7 @@ def process_metadata_update(file_path: str):
     Args:
         file_path: Path to the JSON file that changed
     """
-    global _last_processed_time, _last_processed_content, _last_active_deck, _last_deck1_active, _last_deck2_active
+    global _last_processed_time, _last_processed_content, _last_active_deck, _last_deck1_active, _last_deck2_active, _process_count
     
     # Debounce: check if we recently processed this file
     current_time = time.time()
@@ -731,6 +863,14 @@ def process_metadata_update(file_path: str):
             json.dump(data, f, indent=2, ensure_ascii=False)
         Path(temp_file).rename(file_path)
         logger.info("Enriched metadata saved to djcap_output.json")
+        
+        # Periodic cleanup check
+        _process_count += 1
+        if _process_count % CLEANUP_CHECK_INTERVAL == 0:
+            try:
+                cleanup_output_folder(OUTPUT_FOLDER)
+            except Exception as e:
+                logger.warning(f"Cleanup error (non-fatal): {e}")
     except Exception as e:
         logger.error(f"Failed to save enriched metadata: {e}", exc_info=True)
 
@@ -778,9 +918,9 @@ def main():
     """Main function to start the file watcher."""
     global RUNNING
     
-    if not WATCHDOG_AVAILABLE:
-        logger.error("watchdog library not available. Please install it: pip install watchdog")
-        sys.exit(1)
+    # #region agent log
+    _debug_log("djcap_processor.py:main", "Main function entry", {"WATCHDOG_AVAILABLE": WATCHDOG_AVAILABLE, "METADATA_MODULES_AVAILABLE": METADATA_MODULES_AVAILABLE, "USE_GIPHY_API": USE_GIPHY_API, "GIPHY_API_KEY": bool(GIPHY_API_KEY)}, "K")
+    # #endregion
     
     if not METADATA_MODULES_AVAILABLE:
         logger.warning("AudioApis metadata modules not available. Some features will be disabled.")
@@ -798,13 +938,24 @@ def main():
         logger.warning(f"Input file does not exist: {DJCAP_JSON_FILE}")
         logger.info("Waiting for file to be created...")
     
-    # Create file watcher
-    event_handler = DjcapJsonHandler()
-    observer = Observer()
-    observer.schedule(event_handler, path=os.path.dirname(DJCAP_JSON_FILE), recursive=False)
-    observer.start()
-    
-    logger.info("File watcher started. Press Ctrl+C to stop.")
+    # Use watchdog if available, otherwise fall back to polling
+    if WATCHDOG_AVAILABLE:
+        # #region agent log
+        _debug_log("djcap_processor.py:main", "Using watchdog file watcher", {}, "K")
+        # #endregion
+        # Create file watcher
+        event_handler = DjcapJsonHandler()
+        observer = Observer()
+        observer.schedule(event_handler, path=os.path.dirname(DJCAP_JSON_FILE), recursive=False)
+        observer.start()
+        logger.info("File watcher started (watchdog). Press Ctrl+C to stop.")
+    else:
+        # #region agent log
+        _debug_log("djcap_processor.py:main", "Watchdog not available, using polling fallback", {}, "K")
+        # #endregion
+        logger.warning("watchdog library not available. Using polling fallback (checking every 2 seconds).")
+        logger.warning("For better performance, install watchdog: pip install watchdog")
+        observer = None
     
     # Process initial file if it exists
     if os.path.exists(DJCAP_JSON_FILE):
@@ -812,14 +963,28 @@ def main():
         process_metadata_update(DJCAP_JSON_FILE)
     
     # Keep running
+    last_mtime = 0
     try:
         while RUNNING:
-            time.sleep(1)
+            if observer is None:
+                # Polling mode: check file modification time
+                if os.path.exists(DJCAP_JSON_FILE):
+                    current_mtime = os.path.getmtime(DJCAP_JSON_FILE)
+                    if current_mtime != last_mtime:
+                        # #region agent log
+                        _debug_log("djcap_processor.py:main:poll", "File changed detected via polling", {"last_mtime": last_mtime, "current_mtime": current_mtime}, "K")
+                        # #endregion
+                        last_mtime = current_mtime
+                        # Small delay to ensure atomic write is complete
+                        time.sleep(0.1)
+                        process_metadata_update(DJCAP_JSON_FILE)
+            time.sleep(1 if observer else 2)  # Poll every 2 seconds in polling mode
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     finally:
-        observer.stop()
-        observer.join()
+        if observer:
+            observer.stop()
+            observer.join()
         logger.info("DjCap Metadata Processor stopped.")
 
 
