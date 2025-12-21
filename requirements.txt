@@ -20,6 +20,3 @@ watchdog>=3.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 
-# OpenAI (Responses API) - used by /api/theMood
-openai>=1.40.0
-

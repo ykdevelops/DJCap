@@ -69,6 +69,8 @@ def save_metadata_to_json(metadata: dict, output_file: str):
                     # Keep enriched fields from existing data
                     for field in ['lastfm_tags', 'refined_keywords', 'keyword_scores',
                                  'key_characteristics', 'gifs', 'current_enriched', 'next_enriched',
+                                 'gif_pool',
+                                 'giphy_query', 'giphy_query_parts',
                                  'lyrics_raw', 'lyrics_synced', 'lyrics_source', 'lyrics_track_started_at',
                                  'lyrics_keywords']:
                         if field in existing_deck:

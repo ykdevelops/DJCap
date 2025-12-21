@@ -42,6 +42,34 @@
             padding: 6px 10px;
             border-radius: 12px;
             font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .gif-index-bar {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 10px;
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            pointer-events: none; /* allow video interactions except buttons */
+        }
+        .gif-index-btn {
+            pointer-events: auto;
+            background: rgba(255,255,255,0.85);
+            color: #111;
+            border: 0;
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 12px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+        .gif-index-btn.active {
+            background: rgba(99, 102, 241, 0.95);
+            color: #fff;
         }
         .lyrics-panel {
             position: absolute;
@@ -78,7 +106,7 @@
 <div id="app">
     <div class="player-shell">
         <div class="badge" v-if="activeDeckName">
-            {{ activeDeckName.toUpperCase() }} • {{ activeDeckData?.title || 'Loading...' }}
+            <span>{{ activeDeckName.toUpperCase() }} • {{ activeDeckData?.title || 'Loading...' }}</span>
         </div>
         <video v-if="currentGifVideoUrl"
                :src="currentGifVideoUrl"
@@ -94,6 +122,17 @@
              :alt="currentGifTitle"
              @error="handleImageError"
              @load="onGifLoad">
+
+        <div class="gif-index-bar" v-if="gifCount > 0" aria-label="GIF slots">
+            <button
+                v-for="n in gifCount"
+                :key="n"
+                class="gif-index-btn"
+                :class="{ active: (n - 1) === currentGifIndex }"
+                @click="removeGifAt(n - 1)"
+                :title="`Remove GIF #${n} from rotation`"
+            >{{ n }}</button>
+        </div>
 
         <div class="lyrics-panel" v-if="lyricsPreview && lyricsPreview.length">
             <div class="lyrics-title">Lyrics</div>
@@ -114,6 +153,8 @@ createApp({
         return {
             enrichedData: null,
             gifs: [],
+            gifPool: [],
+            bannedGifIds: [],
             gifKeywords: [],
             currentGifIndex: 0,
             lastGifTrackId: null,
@@ -205,41 +246,72 @@ createApp({
             const deck = this.activeDeckData;
             if (!deck || !deck.title || !deck.artist) {
                 this.gifs = [];
+                this.gifPool = [];
+                this.bannedGifIds = [];
                 this.gifKeywords = [];
                 this.lastGifTrackId = null;
                 this.lastGifKeywordsSig = '';
                 this.resetGifTimers();
                 return;
             }
-            const keywords = [];
-            if (deck.title) keywords.push(String(deck.title));
-            if (deck.artist) keywords.push(String(deck.artist));
-            if (deck.key) keywords.push(String(deck.key));
-            const keywordsSig = keywords.join('||');
             const trackId = `${this.activeDeckName || 'deck'}|${deck.title}|${deck.artist}|${deck.key || ''}`;
-            const now = Date.now();
             const trackChanged = this.lastGifTrackId !== trackId;
-            const keywordsChanged = this.lastGifKeywordsSig !== keywordsSig;
-            const stale = (now - this.lastGifFetchAt) >= this.gifRefreshMs;
-            if (!trackChanged && !keywordsChanged && !stale && this.gifs && this.gifs.length > 0) return;
-            if (trackChanged || keywordsChanged) this.lastGifFetchAt = 0;
-            try {
-                const resp = await fetch(`/api/gifs?deck=active&limit=${this.gifFetchLimit}`, { headers: { 'Accept': 'application/json' }, cache: 'no-cache' });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    const allGifs = data.gifs || [];
-                    const filtered = allGifs.filter(g => g?.id && !this.recentGifIds.includes(g.id));
-                    const selected = filtered.length > 0 ? filtered : allGifs;
-                    const shuffled = this.shuffleArray(selected.slice());
-                    this.gifs = shuffled;
-                    this.gifKeywords = data.keywords || [];
-                    this.lastGifTrackId = trackId;
-                    this.lastGifFetchAt = Date.now();
-                    this.lastGifKeywordsSig = keywordsSig;
-                    this.currentGifIndex = 0;
-                    this.resetGifTimers();
-                }
-            } catch (_) {}
+            if (!trackChanged && this.gifs && this.gifs.length > 0) return;
+
+            // Use GIFs embedded in /api/enriched (no extra API calls / loops).
+            const allGifs = Array.isArray(deck.gifs) ? deck.gifs : [];
+            this.gifPool = Array.isArray(deck.gif_pool) && deck.gif_pool.length > 0 ? deck.gif_pool : allGifs;
+            this.bannedGifIds = [];
+            const filtered = allGifs.filter(g => g?.id && !this.recentGifIds.includes(g.id));
+            const selected = filtered.length > 0 ? filtered : allGifs;
+            const shuffled = this.shuffleArray(selected.slice());
+            this.gifs = shuffled;
+
+            // Show EXACTLY what we feed into the GIF search (artist-only policy)
+            if (Array.isArray(deck.giphy_query_parts) && deck.giphy_query_parts.length >= 1) {
+                this.gifKeywords = deck.giphy_query_parts.slice(0, 1).map(String);
+            } else {
+                const a = deck.artist ? String(deck.artist) : 'Unknown Artist';
+                this.gifKeywords = [a];
+            }
+            this.lastGifTrackId = trackId;
+            this.lastGifFetchAt = Date.now();
+            this.lastGifKeywordsSig = `${deck.giphy_query || ''}`;
+            this.currentGifIndex = 0;
+            this.resetGifTimers();
+        },
+
+        getGifId(gif) {
+            if (!gif) return '';
+            return String(gif.id || gif.url || '');
+        },
+
+        removeGifAt(index) {
+            if (!this.gifs || this.gifs.length === 0) return;
+            if (index < 0 || index >= this.gifs.length) return;
+
+            const removed = this.gifs[index];
+            const removedId = this.getGifId(removed);
+            if (removedId && !this.bannedGifIds.includes(removedId)) this.bannedGifIds.push(removedId);
+
+            const next = this.gifs.slice();
+            next.splice(index, 1);
+            this.gifs = next;
+
+            if (this.currentGifIndex > index) this.currentGifIndex -= 1;
+            if (this.currentGifIndex >= this.gifs.length) this.currentGifIndex = 0;
+
+            const currentIds = new Set(this.gifs.map(g => this.getGifId(g)));
+            const replacement = (this.gifPool || []).find(g => {
+                const id = this.getGifId(g);
+                if (!id) return false;
+                if (this.bannedGifIds.includes(id)) return false;
+                if (currentIds.has(id)) return false;
+                return true;
+            });
+            if (replacement) this.gifs.push(replacement);
+
+            this.resetGifTimers();
         },
         getDeckActive(deckName) {
             if (this.enrichedData && this.enrichedData[deckName]) {

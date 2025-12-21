@@ -173,6 +173,34 @@
             font-weight: bold;
         }
 
+        .gif-index-bar {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .gif-index-btn {
+            border: 0;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 0.9em;
+            font-weight: 700;
+            cursor: pointer;
+            background: rgba(102, 126, 234, 0.15);
+            color: #334155;
+        }
+        .gif-index-btn.active {
+            background: rgba(102, 126, 234, 0.85);
+            color: #fff;
+        }
+        .gif-index-btn:hover {
+            background: rgba(102, 126, 234, 0.25);
+        }
+        .gif-index-btn.active:hover {
+            background: rgba(102, 126, 234, 0.95);
+        }
+
         .empty-state {
             text-align: center;
             padding: 40px;
@@ -292,57 +320,54 @@
                     </div>
                 </div>
 
+                <!-- GIFs Card (swapped position with GIF Search Preview) -->
                 <div class="card">
-                    <h2>🧠 Keywords + theMood (Wikipedia)</h2>
-
-                    <div v-if="theMoodLoading" class="empty-state">
-                        <div class="empty-state-icon">⏳</div>
-                        <p>Fetching Wikipedia mood…</p>
-                    </div>
-
-                    <div v-else-if="theMoodError" class="empty-state">
-                        <div class="empty-state-icon">⚠️</div>
-                        <p>{{ theMoodError }}</p>
-                    </div>
-
-                    <div v-else-if="theMoodData && theMoodData.theMood">
-                        <div class="metadata-grid" style="grid-template-columns: 1fr;">
-                            <div class="metadata-item">
-                                <div class="metadata-label">Label</div>
-                                <div class="metadata-value">{{ theMoodData.theMood.label }}</div>
-                            </div>
-                            <div class="metadata-item" v-if="theMoodData.genres && theMoodData.genres.length">
-                                <div class="metadata-label">Genres</div>
-                                <div class="metadata-value">{{ theMoodData.genres.join(', ') }}</div>
-                            </div>
-                            <div class="metadata-item">
-                                <div class="metadata-label">Scene</div>
-                                <div class="metadata-value">{{ theMoodData.theMood.scene }}</div>
+                    <h2>🎬 Visuals</h2>
+                    <div v-if="gifCount > 0" class="gifs-section">
+                        <div class="gif-display-container">
+                            <img :src="currentGifUrl" 
+                                 :alt="currentGifTitle"
+                                 :class="['gif-image', gifTransitionClass]"
+                                 @error="handleImageError"
+                                 @load="onGifLoad">
+                            <div class="gif-counter" v-if="gifCount > 1">
+                                {{ currentGifIndex + 1 }} / {{ gifCount }}
                             </div>
                         </div>
-
-                        <div class="tags-section" v-if="theMoodData.theMood.keywords && theMoodData.theMood.keywords.length">
-                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Keywords</h3>
-                            <div class="tags">
-                                <span v-for="kw in theMoodData.theMood.keywords" :key="kw" class="tag keyword">
-                                    {{ kw }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div class="tags-section" v-if="theMoodData.theMood.evidence_phrases && theMoodData.theMood.evidence_phrases.length">
-                            <h3 style="margin-top: 20px; margin-bottom: 10px; color: #d32f2f;">OpenAI response (grounded in Wikipedia)</h3>
-                            <div class="tags">
-                                <span v-for="ev in theMoodData.theMood.evidence_phrases" :key="ev" class="tag lastfm">
-                                    {{ ev }}
-                                </span>
-                            </div>
+                        <div class="gif-index-bar" aria-label="GIF slots">
+                            <button
+                                v-for="n in gifCount"
+                                :key="n"
+                                class="gif-index-btn"
+                                :class="{ active: (n - 1) === currentGifIndex }"
+                                @click="removeGifAt(n - 1)"
+                                :title="`Remove GIF #${n} from rotation`"
+                            >{{ n }}</button>
                         </div>
                     </div>
-
                     <div v-else class="empty-state">
-                        <div class="empty-state-icon">🗞️</div>
-                        <p>Waiting for an active track to fetch theMood…</p>
+                        <div class="empty-state-icon">🎭</div>
+                        <p>No GIFs available yet. Waiting for track data...</p>
+                    </div>
+                </div>
+
+                <!-- GIF Search Preview (swapped position with Visuals) -->
+                <div class="card" v-if="activeDeckData">
+                    <h2>🎬 GIF Search Preview</h2>
+                    <div class="tags-section">
+                        <h3 style="margin-top: 10px; margin-bottom: 10px; color: #667eea;">Search Keywords</h3>
+                        <div class="tags">
+                            <span v-for="keyword in gifKeywords"
+                                  :key="keyword"
+                                  class="tag keyword">
+                                "{{ keyword }}"
+                            </span>
+                        </div>
+                    </div>
+                    <div class="tags-section" style="margin-top: 15px;">
+                        <p style="color: #4ec9b0; font-weight: 600;">
+                            Found {{ gifCount }} GIF{{ gifCount === 1 ? '' : 's' }} for this track
+                        </p>
                     </div>
                 </div>
             </div>
@@ -382,13 +407,15 @@
                     enrichedData: null,
                     isConnected: false,
                     pollInterval: null,
+                    gifCycleInterval: null,
+                    currentGifIndex: 0,
+                    gifTransitionClass: 'fade-in',
                     lastTrackId: null,
-                    theMoodData: null,
-                    theMoodLoading: false,
-                    theMoodError: null,
-                    lastTheMoodTrackId: null,
-                    lastTheMoodAttemptAt: 0,
-                    lastTheMoodErrorAt: 0
+                    gifs: [],
+                    gifPool: [],
+                    bannedGifIds: [],
+                    gifKeywords: [],
+                    lastGifTrackId: null
                 };
             },
             computed: {
@@ -419,10 +446,20 @@
                     // Return the deck data as-is - it may have current_enriched nested inside
                     return deckData;
                 },
-                activeTrackId() {
-                    const d = this.activeDeckData;
-                    if (!d || !d.title || !d.artist) return null;
-                    return `${d.title}|${d.artist}`;
+                gifCount() {
+                    return this.gifs ? this.gifs.length : 0;
+                },
+                currentGif() {
+                    if (!this.gifs || this.gifs.length === 0) return null;
+                    return this.gifs[this.currentGifIndex % this.gifs.length];
+                },
+                currentGifUrl() {
+                    if (!this.currentGif) return '';
+                    // Giphy API returns url directly, but also check for images.downsized.url for compatibility
+                    return this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
+                },
+                currentGifTitle() {
+                    return this.currentGif?.title || 'GIF';
                 }
             },
             mounted() {
@@ -431,79 +468,98 @@
                 this.pollInterval = setInterval(() => {
                     this.fetchData();
                 }, 2000);
+                // Start GIF cycling
+                this.startGifCycle();
             },
             beforeUnmount() {
                 if (this.pollInterval) {
                     clearInterval(this.pollInterval);
+                }
+                if (this.gifCycleInterval) {
+                    clearInterval(this.gifCycleInterval);
                 }
             },
             methods: {
                 debugState() {
                     console.log('enrichedData:', this.enrichedData);
                     console.log('activeDeckData:', this.activeDeckData);
-                    console.log('theMoodData:', this.theMoodData);
-                    console.log('theMoodLoading:', this.theMoodLoading);
-                    console.log('theMoodError:', this.theMoodError);
+                    console.log('gifKeywords:', this.gifKeywords);
+                    console.log('gifCount:', this.gifCount);
+                    console.log('currentGif:', this.currentGif);
+                    console.log('currentGifUrl:', this.currentGifUrl);
                 },
-                async fetchTheMoodForActiveDeck() {
+                async fetchGifsForActiveDeck() {
+                    // Uses GIFs embedded in /api/enriched (no extra API calls / loops).
                     const deck = this.activeDeckData;
                     if (!deck || !deck.title || !deck.artist) {
-                        this.theMoodData = null;
-                        this.theMoodError = null;
-                        this.theMoodLoading = false;
-                        this.lastTheMoodTrackId = null;
-                        this.lastTheMoodAttemptAt = 0;
-                        this.lastTheMoodErrorAt = 0;
+                        this.gifs = [];
+                        this.gifPool = [];
+                        this.bannedGifIds = [];
+                        this.gifKeywords = [];
+                        this.lastGifTrackId = null;
+                        // Clear any existing GIF cycle when no valid track
+                        this.startGifCycle();
                         return;
                     }
 
-                    const trackId = `${deck.title}|${deck.artist}`;
-                    if (this.lastTheMoodTrackId === trackId && this.theMoodData) {
+                    const trackId = `${deck.title}|${deck.artist}|${deck.key || ''}`;
+                    if (this.lastGifTrackId === trackId && this.gifs && this.gifs.length > 0) {
+                        // Already have GIFs for this track
                         return;
                     }
 
-                    // Don't spam: if we're already fetching, or we recently errored, back off.
-                    if (this.theMoodLoading) return;
-                    const now = Date.now();
-                    if (this.lastTheMoodErrorAt && (now - this.lastTheMoodErrorAt) < 30000) {
-                        return; // 30s cooldown after an error
-                    }
-                    if (this.lastTheMoodAttemptAt && (now - this.lastTheMoodAttemptAt) < 2000) {
-                        return; // avoid duplicate calls within the polling window
-                    }
+                    this.gifs = Array.isArray(deck.gifs) ? deck.gifs : [];
+                    this.gifPool = Array.isArray(deck.gif_pool) && deck.gif_pool.length > 0 ? deck.gif_pool : (Array.isArray(deck.gifs) ? deck.gifs : []);
+                    this.bannedGifIds = [];
 
-                    this.theMoodLoading = true;
-                    this.theMoodError = null;
-                    this.lastTheMoodAttemptAt = now;
-                    try {
-                        const resp = await fetch('/api/theMood', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json',
-                            },
-                            cache: 'no-cache',
-                            body: JSON.stringify({
-                                artist: String(deck.artist),
-                                title: String(deck.title),
-                                max_keywords: 18,
-                                max_scene_sentences: 2
-                            })
-                        });
-                        if (!resp.ok) {
-                            const txt = await resp.text();
-                            throw new Error(`theMood error ${resp.status}: ${txt}`);
-                        }
-                        this.theMoodData = await resp.json();
-                        this.lastTheMoodTrackId = trackId;
-                    } catch (err) {
-                        this.theMoodError = String(err?.message || err);
-                        this.theMoodData = null;
-                        this.lastTheMoodTrackId = null;
-                        this.lastTheMoodErrorAt = Date.now();
-                    } finally {
-                        this.theMoodLoading = false;
+                    // Show EXACTLY what we feed into the GIF search (artist-only policy)
+                    if (Array.isArray(deck.giphy_query_parts) && deck.giphy_query_parts.length >= 1) {
+                        this.gifKeywords = deck.giphy_query_parts.slice(0, 1).map(String);
+                    } else {
+                        const a = deck.artist ? String(deck.artist) : 'Unknown Artist';
+                        this.gifKeywords = [a];
                     }
+                    this.lastGifTrackId = trackId;
+
+                    // Always restart the GIF cycle for the latest track data
+                    this.startGifCycle();
+                },
+
+                getGifId(gif) {
+                    if (!gif) return '';
+                    return String(gif.id || gif.url || '');
+                },
+
+                removeGifAt(index) {
+                    if (!this.gifs || this.gifs.length === 0) return;
+                    if (index < 0 || index >= this.gifs.length) return;
+
+                    const removed = this.gifs[index];
+                    const removedId = this.getGifId(removed);
+                    if (removedId && !this.bannedGifIds.includes(removedId)) this.bannedGifIds.push(removedId);
+
+                    // Remove from current rotation by index
+                    const next = this.gifs.slice();
+                    next.splice(index, 1);
+                    this.gifs = next;
+
+                    // Adjust current index to keep it stable
+                    if (this.currentGifIndex > index) this.currentGifIndex -= 1;
+                    if (this.currentGifIndex >= this.gifs.length) this.currentGifIndex = 0;
+
+                    // Replace from pool (prefer unseen + not banned)
+                    const currentIds = new Set(this.gifs.map(g => this.getGifId(g)));
+                    const replacement = (this.gifPool || []).find(g => {
+                        const id = this.getGifId(g);
+                        if (!id) return false;
+                        if (this.bannedGifIds.includes(id)) return false;
+                        if (currentIds.has(id)) return false;
+                        return true;
+                    });
+                    if (replacement) this.gifs.push(replacement);
+
+                    // Restart cycling immediately
+                    this.startGifCycle();
                 },
                 async fetchData() {
                     try {
@@ -522,8 +578,8 @@
                             this.enrichedData = data;
                             this.isConnected = true;
 
-                            // Fetch Wikipedia/OpenAI theMood based only on deck data (title, artist)
-                            await this.fetchTheMoodForActiveDeck();
+                            // Fetch GIFs based only on deck data (title, artist, key)
+                            await this.fetchGifsForActiveDeck();
 
                             // Log current state after each successful fetch
                             this.debugState();
@@ -560,7 +616,52 @@
                     // Fallback to active_deck field
                     return this.enrichedData && this.enrichedData.active_deck === deckName;
                 },
-                // GIF methods removed (Visuals / GIF Search Preview removed)
+                startGifCycle() {
+                    // Clear existing interval
+                    if (this.gifCycleInterval) {
+                        clearInterval(this.gifCycleInterval);
+                    }
+                    
+                    // Check if we have GIFs and if track changed
+                    if (!this.activeDeckData || this.gifCount === 0) {
+                        return;
+                    }
+                    
+                    // Check if track changed (reset cycle)
+                    const trackId = `${this.activeDeckData.title}|${this.activeDeckData.artist}`;
+                    if (trackId !== this.lastTrackId) {
+                        this.currentGifIndex = 0;
+                        this.lastTrackId = trackId;
+                        // Reset transition class for new track
+                        this.gifTransitionClass = 'fade-in';
+                    }
+                    
+                    // Only start cycling if we have more than 1 GIF
+                    if (this.gifCount > 1) {
+                        // Start cycling: 1 GIF per second
+                        this.gifCycleInterval = setInterval(() => {
+                            this.cycleToNextGif();
+                        }, 1000);
+                    }
+                },
+                cycleToNextGif() {
+                    if (!this.activeDeckData || this.gifCount === 0) {
+                        return;
+                    }
+                    
+                    // Fade out current GIF
+                    this.gifTransitionClass = 'fade-out';
+                    
+                    // After fade, switch to next GIF
+                    setTimeout(() => {
+                        this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
+                        this.gifTransitionClass = 'fade-in';
+                    }, 500); // Half of transition duration
+                },
+                onGifLoad() {
+                    // Ensure GIF is visible when loaded
+                    this.gifTransitionClass = 'fade-in';
+                }
             }
         }).mount('#app');
     </script>

@@ -45,7 +45,6 @@ DjCap/
 │   ├── region_coordinates.json  # OCR region coordinates
 │   └── output/            # Output JSON files
 │       ├── djcap_output.json
-│       └── djcap_enriched.json
 ├── djcap.py               # Main capture service
 ├── djcap_processor.py     # Metadata enrichment service
 └── requirements.txt       # Python dependencies
@@ -98,7 +97,7 @@ The metadata processor service watches `djcap_output.json` for changes and enric
 
 - **Last.fm tags**: Fetches genre, mood, and context tags for tracks
 - **Keyword analysis**: Analyzes and selects the best keywords from metadata and tags
-- **GIF search**: Fetches relevant GIFs based on refined keywords
+- **GIF search**: Fetches a safe, rate-limited set of GIFs for live visuals
 
 ### Setup
 
@@ -110,6 +109,19 @@ GIPHY_API_KEY=your_giphy_api_key
 
 Alternatively, the processor will try to use API keys from AudioApis if available.
 
+Optional tuning (safe defaults):
+
+```bash
+# Hard cap on live Giphy requests per rolling hour (persisted across restarts)
+GIPHY_MAX_REQUESTS_PER_HOUR=40
+
+# Pool size fetched per track (still a single request). UI shows 5 at a time.
+GIPHY_FETCH_POOL_SIZE=25
+
+# How many GIF IDs to remember per artist to reduce repeats across tracks
+GIPHY_HISTORY_MAX_IDS_PER_ARTIST=200
+```
+
 2. Run the processor:
 ```bash
 python djcap_processor.py
@@ -120,6 +132,14 @@ The processor will:
 - Enrich active decks (where `active: true`) with Last.fm tags, keywords, and GIFs
 - Write enriched data directly back to `data/output/djcap_output.json`
 - Inactive decks keep only basic metadata (title, artist, BPM, key, active)
+
+### GIF behavior (safe defaults)
+
+- **Search query**: artist-only (broad and consistent)
+- **Rotation size**: 5 GIFs per track (`gifs`)
+- **Pool**: a larger per-track pool (`gif_pool`) is fetched once per track so the UI can replace disliked GIFs without extra API calls
+- **Rate limiting**: live Giphy calls are capped per rolling hour; state is saved to `data/output/giphy_rate_state.json`
+- **Repeat avoidance**: recently used GIF IDs are tracked per artist in `data/output/giphy_history.json`
 
 ### Output Format
 
@@ -141,7 +161,10 @@ The JSON file (`data/output/djcap_output.json`) contains:
       "dance": 0.88
     },
     "key_characteristics": ["innocent", "pure", "simple", "happy"],
-    "gifs": [...]
+    "giphy_query": "Artist Name",
+    "giphy_query_parts": ["Artist Name"],
+    "gifs": [...],
+    "gif_pool": [...]
   },
   "deck2": {
     "deck": "deck2",
@@ -157,7 +180,7 @@ The JSON file (`data/output/djcap_output.json`) contains:
 }
 ```
 
-**Note:** Only active decks (`active: true`) are enriched with `lastfm_tags`, `refined_keywords`, `keyword_scores`, `key_characteristics`, and `gifs`. Inactive decks contain only basic metadata.
+**Note:** Only active decks (`active: true`) are enriched with `lastfm_tags`, `refined_keywords`, `keyword_scores`, `key_characteristics`, `gifs`, and `gif_pool`. Inactive decks contain only basic metadata.
 
 ## File Watching
 
@@ -197,11 +220,9 @@ Edit `djcap_processor.py` to change:
 - After recalibration, restart `djcap.py` (and the frontend if running) so the new coordinates are picked up.
 - Both decks can be `active: true` if both are playing; `active_deck` is the primary display deck used by clients when needed.
 
-### `/api/theMood` errors (frontend)
-- The frontend server exposes:
-  - `GET /api/theMood`: lightweight “current mood” derived from the active deck’s enriched fields (no OpenAI calls).
-  - `POST /api/theMood`: Wikipedia-grounded theMood generation (requires OpenAI).
-- For `POST /api/theMood`, set `OPENAI_API_KEY` in the repo root `.env` (recommended) or export it in your shell.
+### Frontend API notes
+- The frontend server exposes **`GET /api/enriched`** (serves `data/output/djcap_output.json`) and static HTML.
+- UI assets are served with **no-cache** headers to make local development updates show immediately.
 
 ### Poor OCR accuracy
 - Ensure djay Pro window is visible (not minimized)
@@ -261,7 +282,7 @@ http://localhost:8080
 The frontend will:
 - Display current track metadata (title, artist, BPM, key)
 - Show Last.fm tags and refined keywords
-- Display GIFs fetched based on the keywords
+- Display 5 GIFs (`gifs`) and allow replacing individual GIFs from the per-track `gif_pool`
 - Auto-refresh every 2 seconds to show live updates
 
 ### Frontend Features
@@ -269,7 +290,8 @@ The frontend will:
 - **Real-time Updates**: Automatically polls for new data every 2 seconds
 - **Track Information**: Shows title, artist, BPM, and key
 - **Tags & Keywords**: Displays Last.fm tags and refined keywords
-- **GIF Gallery**: Shows all GIFs fetched for the current track
+- **GIF Visuals**: Cycles through 5 GIFs for the current track
+- **Replace a GIF**: Click a numbered slot under the visuals to remove that GIF from rotation; it is replaced immediately from `gif_pool` (no extra API calls)
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## License

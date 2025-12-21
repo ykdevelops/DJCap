@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import os
 import re
+from collections import deque
+import random
+
+# Load API keys early (loads repo-root `.env` via python-dotenv).
+# Important: AudioApis `metadata.giphy_client` imports its own `config` module and reads
+# `GIPHY_API_KEY` at import time. If we import AudioApis first, it can cache an empty key.
+from src.config import LASTFM_API_KEY, GIPHY_API_KEY
 
 # Add AudioApis to Python path
 AUDIOAPIS_PATH = '/Users/youssefkhalil/AudioApis'
@@ -27,6 +34,8 @@ try:
 except ImportError:
     WATCHDOG_AVAILABLE = False
     logging.warning("watchdog not available. Install with: pip install watchdog")
+    # Ensure this name exists so the module can import/run without crashing.
+    FileSystemEventHandler = object  # type: ignore[misc,assignment]
 
 # Import AudioApis metadata modules
 try:
@@ -38,7 +47,6 @@ except ImportError as e:
     METADATA_MODULES_AVAILABLE = False
     logging.warning(f"AudioApis metadata modules not available: {e}")
 
-from src.config import LASTFM_API_KEY, GIPHY_API_KEY
 from src.key_translator import translate_key_to_characteristics
 from src.gif_bank import get_offline_gifs
 
@@ -51,7 +59,223 @@ USE_KEYWORD_ANALYZER = False  # Set to False to skip keyword analyzer (use basic
 USE_OFFLINE_GIF_BANK = True  # Use offline GIF bank when Giphy is disabled or returns no results
 
 # Giphy API configuration
-GIPHY_GIFS_PER_TRACK = 100  # Maximum GIFs to fetch per track (Giphy API allows up to 100 per call)
+# Fetch exactly N GIFs per track (safe default: 5)
+GIPHY_GIFS_PER_TRACK = 5
+
+# Fetch a larger pool per track (still one request) so we can avoid reusing the same
+# GIFs for the same artist across consecutive tracks. Final output is still capped to 5.
+GIPHY_FETCH_POOL_SIZE = int(os.getenv("GIPHY_FETCH_POOL_SIZE", "25"))
+GIPHY_FETCH_POOL_SIZE = max(GIPHY_GIFS_PER_TRACK, min(50, GIPHY_FETCH_POOL_SIZE))
+
+# Persist a small per-artist history of GIF IDs to reduce repetition across tracks.
+GIPHY_HISTORY_PATH = Path(__file__).resolve().parent / "data" / "output" / "giphy_history.json"
+GIPHY_HISTORY_MAX_IDS_PER_ARTIST = int(os.getenv("GIPHY_HISTORY_MAX_IDS_PER_ARTIST", "200"))
+GIPHY_HISTORY_MAX_IDS_PER_ARTIST = max(20, min(2000, GIPHY_HISTORY_MAX_IDS_PER_ARTIST))
+
+_GIPHY_HISTORY_LOADED = False
+_GIPHY_HISTORY: Dict[str, deque] = {}
+
+# Hard cap: maximum number of live Giphy requests per rolling hour.
+# Persisted to disk so restarts don't reset the quota usage.
+GIPHY_MAX_REQUESTS_PER_HOUR = int(os.getenv("GIPHY_MAX_REQUESTS_PER_HOUR", "40"))
+GIPHY_RATE_STATE_PATH = Path(__file__).resolve().parent / "data" / "output" / "giphy_rate_state.json"
+
+_GIPHY_RATE_LOADED = False
+_GIPHY_RATE_TS = deque()
+
+
+def _ensure_giphy_rate_loaded() -> None:
+    """Load persisted request timestamps once (best-effort)."""
+    global _GIPHY_RATE_LOADED, _GIPHY_RATE_TS
+    if _GIPHY_RATE_LOADED:
+        return
+    try:
+        if GIPHY_RATE_STATE_PATH.exists():
+            data = json.loads(GIPHY_RATE_STATE_PATH.read_text())
+            ts = data.get("timestamps", [])
+            parsed = []
+            for t in ts:
+                if isinstance(t, (int, float)):
+                    parsed.append(float(t))
+                elif isinstance(t, str):
+                    try:
+                        parsed.append(float(t))
+                    except Exception:
+                        pass
+            parsed.sort()
+            _GIPHY_RATE_TS = deque(parsed)
+    except Exception:
+        _GIPHY_RATE_TS = deque()
+    _GIPHY_RATE_LOADED = True
+
+
+def _giphy_prune(now: float) -> None:
+    """Drop timestamps older than 1 hour."""
+    cutoff = now - 3600.0
+    while _GIPHY_RATE_TS and _GIPHY_RATE_TS[0] < cutoff:
+        _GIPHY_RATE_TS.popleft()
+
+
+def _giphy_can_request(cost: int = 1) -> bool:
+    _ensure_giphy_rate_loaded()
+    now = time.time()
+    _giphy_prune(now)
+    return (len(_GIPHY_RATE_TS) + cost) <= GIPHY_MAX_REQUESTS_PER_HOUR
+
+
+def _giphy_record_request(cost: int = 1) -> None:
+    _ensure_giphy_rate_loaded()
+    now = time.time()
+    _giphy_prune(now)
+    for _ in range(max(1, cost)):
+        _GIPHY_RATE_TS.append(now)
+    try:
+        GIPHY_RATE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        GIPHY_RATE_STATE_PATH.write_text(json.dumps({"timestamps": list(_GIPHY_RATE_TS)}, indent=2))
+    except Exception:
+        # Best effort only: don't fail enrichment if persistence fails
+        pass
+
+
+def _clean_title_for_giphy(title: Optional[str]) -> Optional[str]:
+    """Normalize a track title for use in the Giphy query."""
+    if not title:
+        return None
+    cleaned = str(title)
+    cleaned = re.sub(r"\s*\([^)]*\)", "", cleaned)  # remove parentheticals
+    cleaned = re.sub(r"\s+feat\.?.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+ft\.?.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+    return cleaned or None
+
+
+def _build_giphy_query_parts(title: Optional[str], artist: Optional[str]) -> List[str]:
+    """
+    Build the Giphy search "keywords" list.
+
+    Policy: artist-only search (no title) to keep results broad and consistent.
+    """
+    if not artist:
+        return []
+    a = str(artist).strip()
+    return [a] if a else []
+
+
+def _normalize_artist_key(artist: Optional[str]) -> str:
+    return (str(artist).strip().lower() if artist else "").strip()
+
+
+def _ensure_giphy_history_loaded() -> None:
+    """Load persisted per-artist GIF ID history once (best-effort)."""
+    global _GIPHY_HISTORY_LOADED, _GIPHY_HISTORY
+    if _GIPHY_HISTORY_LOADED:
+        return
+    _GIPHY_HISTORY = {}
+    try:
+        if GIPHY_HISTORY_PATH.exists():
+            data = json.loads(GIPHY_HISTORY_PATH.read_text())
+            if isinstance(data, dict):
+                for k, ids in data.items():
+                    if not isinstance(k, str) or not isinstance(ids, list):
+                        continue
+                    cleaned = [str(x) for x in ids if x]
+                    _GIPHY_HISTORY[k] = deque(cleaned[-GIPHY_HISTORY_MAX_IDS_PER_ARTIST:])
+    except Exception:
+        _GIPHY_HISTORY = {}
+    _GIPHY_HISTORY_LOADED = True
+
+
+def _save_giphy_history() -> None:
+    try:
+        GIPHY_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {k: list(v) for k, v in _GIPHY_HISTORY.items()}
+        GIPHY_HISTORY_PATH.write_text(json.dumps(payload, indent=2))
+    except Exception:
+        pass
+
+
+def _filter_and_select_gifs_for_artist(
+    artist: Optional[str],
+    gifs: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Prefer GIFs not recently used for the same artist.
+    Returns <= GIPHY_GIFS_PER_TRACK and records selections to history.
+    """
+    if not gifs:
+        return []
+
+    _ensure_giphy_history_loaded()
+    artist_key = _normalize_artist_key(artist)
+    used_ids = set(_GIPHY_HISTORY.get(artist_key, deque())) if artist_key else set()
+
+    # De-dupe within this batch first
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for g in gifs:
+        gid = g.get("id") or g.get("url") or ""
+        if not gid or gid in seen:
+            continue
+        seen.add(gid)
+        unique.append(g)
+
+    # Shuffle so we don't always pick the same "top" items
+    random.shuffle(unique)
+
+    fresh: List[Dict[str, Any]] = []
+    fallback: List[Dict[str, Any]] = []
+    for g in unique:
+        gid = g.get("id") or g.get("url") or ""
+        if artist_key and gid in used_ids:
+            fallback.append(g)
+        else:
+            fresh.append(g)
+
+    selected = (fresh + fallback)[:GIPHY_GIFS_PER_TRACK]
+
+    if artist_key:
+        q = _GIPHY_HISTORY.get(artist_key)
+        if q is None:
+            q = deque()
+            _GIPHY_HISTORY[artist_key] = q
+        for g in selected:
+            gid = g.get("id") or g.get("url") or ""
+            if gid:
+                q.append(gid)
+        while len(q) > GIPHY_HISTORY_MAX_IDS_PER_ARTIST:
+            q.popleft()
+        _save_giphy_history()
+
+    return selected
+
+
+def _dedupe_gif_list(gifs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """De-dupe GIFs by (id or url) while preserving order."""
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for g in gifs or []:
+        gid = g.get("id") or g.get("url") or ""
+        if not gid or gid in seen:
+            continue
+        seen.add(gid)
+        unique.append(g)
+    return unique
+
+
+def _enriched_gif_policy_stale(deck_data: Dict[str, Any], enriched: Dict[str, Any]) -> bool:
+    """
+    Return True if the currently stored enriched payload doesn't match our current GIF policy.
+    This lets us refresh current_enriched even when the track is the "same" (e.g. after config changes).
+    """
+    desired_parts = _build_giphy_query_parts(deck_data.get("title"), deck_data.get("artist"))
+    qp = enriched.get("giphy_query_parts")
+    qp_ok = isinstance(qp, list) and qp[: len(desired_parts)] == desired_parts
+    gifs = enriched.get("gifs")
+    gifs_ok = isinstance(gifs, list) and len(gifs) <= GIPHY_GIFS_PER_TRACK if desired_parts else True
+    pool = enriched.get("gif_pool")
+    # Ensure we have a pool to support interactive replacements.
+    pool_ok = isinstance(pool, list) and (len(pool) >= len(gifs or []) if desired_parts else True)
+    return (not qp_ok) or (not gifs_ok) or (not pool_ok)
 
 # Configure logging
 logging.basicConfig(
@@ -205,64 +429,48 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         logger.debug("Using basic keywords (title, artist, key characteristics) - no API calls")
     
-    # Build search keywords once – used by both online Giphy and offline bank
-    search_keywords: List[str] = []
+    # Build EXACTLY ONE Giphy query per track (artist-only policy)
+    query_parts: List[str] = _build_giphy_query_parts(title, artist)
+    query = " ".join(query_parts).strip() if query_parts else None
 
-    # 1) Prefer artist – usually broad and reliable
-    if artist:
-        search_keywords.append(artist)
+    search_keywords: List[str] = [query] if query else []
+    # Fetch a larger pool (still one request) so we can avoid reusing the same GIFs
+    # for the same artist across consecutive tracks. Final output is still capped to 5.
+    per_keyword_limit = GIPHY_FETCH_POOL_SIZE
 
-    # 2) Clean up title (remove feat/parentheses) so it's not overly specific
-    if title:
-        cleaned_title = title
-        # Remove parenthetical parts, e.g. "(feat. Bruno Mars)", "(Radio Edit)"
-        cleaned_title = re.sub(r"\s*\([^)]*\)", "", cleaned_title)
-        # Remove 'feat.' or 'ft.' segments
-        cleaned_title = re.sub(r"\s+feat\.?.*$", "", cleaned_title, flags=re.IGNORECASE)
-        cleaned_title = re.sub(r"\s+ft\.?.*$", "", cleaned_title, flags=re.IGNORECASE)
-        cleaned_title = cleaned_title.strip()
-        if cleaned_title and cleaned_title not in search_keywords:
-            search_keywords.append(cleaned_title)
-
-    # 3) Add up to two key characteristics (e.g. mood descriptors)
-    if key_characteristics:
-        for kc in key_characteristics[:2]:
-            if kc not in search_keywords:
-                search_keywords.append(kc)
-
-    # 4) Fallback to refined_keywords if we somehow have nothing
-    if not search_keywords:
-        search_keywords = refined_keywords
-
-    # Limit number of keywords to avoid too many API calls
-    search_keywords = search_keywords[:3]
-
-    # Distribute total GIF budget across keywords (e.g. 100 total)
-    per_keyword_limit = max(1, min(10, GIPHY_GIFS_PER_TRACK // max(1, len(search_keywords))))
-
-    gifs = []
+    gifs: List[Dict[str, Any]] = []
+    gif_pool: List[Dict[str, Any]] = []
 
     # Primary: live Giphy API (if enabled)
-    if USE_GIPHY_API and METADATA_MODULES_AVAILABLE and GIPHY_API_KEY and refined_keywords:
+    # Also avoid re-fetch loops: if this deck already has gifs for the same query, reuse them.
+    existing_query = deck_data.get("giphy_query")
+    existing_gifs = deck_data.get("gifs")
+    existing_pool = deck_data.get("gif_pool")
+    if isinstance(existing_gifs, list) and existing_gifs and existing_query and existing_query == query:
+        gifs = existing_gifs[:GIPHY_GIFS_PER_TRACK]
+        if isinstance(existing_pool, list) and existing_pool:
+            gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
+        else:
+            gif_pool = _dedupe_gif_list(existing_gifs)[:GIPHY_FETCH_POOL_SIZE]
+        logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)})")
+    elif USE_GIPHY_API and METADATA_MODULES_AVAILABLE and GIPHY_API_KEY and search_keywords:
         try:
-            logger.info(f"Fetching GIFs from Giphy for keywords: {search_keywords} (limit_per_keyword={per_keyword_limit})")
-            gifs = fetch_gifs_for_keywords(search_keywords, limit_per_keyword=per_keyword_limit)
+            if not _giphy_can_request(cost=len(search_keywords)):
+                logger.warning(
+                    f"Giphy rate limit reached ({GIPHY_MAX_REQUESTS_PER_HOUR}/hour). "
+                    f"Skipping live Giphy for query={search_keywords} and using offline bank."
+                )
+            else:
+                logger.info(f"Fetching GIF pool (limit={per_keyword_limit}) from Giphy for query: {search_keywords[0]}")
+                _giphy_record_request(cost=len(search_keywords))
+                gifs = fetch_gifs_for_keywords(search_keywords, limit_per_keyword=per_keyword_limit)
 
-            # Remove duplicates based on GIF ID / URL
-            seen_ids = set()
-            unique_gifs = []
-            for gif in gifs:
-                gif_id = gif.get('id') or gif.get('url', '')
-                if gif_id and gif_id not in seen_ids:
-                    seen_ids.add(gif_id)
-                    unique_gifs.append(gif)
-                elif not gif_id:
-                    unique_gifs.append(gif)
-            gifs = unique_gifs
+            # Build pool + select 5 (avoid repeats for same artist)
+            gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
 
-            # Limit to max allowed
-            gifs = gifs[:GIPHY_GIFS_PER_TRACK]
-            logger.info(f"Giphy API: fetched {len(gifs)} GIFs for track (cycling at 1 per second = {len(gifs)} seconds)")
+            # Select up to 5, avoiding recently used GIFs for the same artist.
+            gifs = _filter_and_select_gifs_for_artist(artist, gif_pool)
+            logger.info(f"Giphy API: selected {len(gifs)} GIFs for track (pool={per_keyword_limit})")
             if gifs:
                 first = gifs[0]
                 logger.info(f"Giphy API: first GIF sample id={first.get('id')}, url={first.get('url')}")
@@ -274,7 +482,9 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     # Fallback / offline mode: use GIF bank if enabled and we still have no GIFs
     if USE_OFFLINE_GIF_BANK and not gifs:
         logger.info(f"Using offline GIF bank for keywords: {search_keywords}")
-        gifs = get_offline_gifs(search_keywords, limit=GIPHY_GIFS_PER_TRACK)
+        pool = get_offline_gifs(search_keywords, limit=GIPHY_FETCH_POOL_SIZE)
+        gif_pool = _dedupe_gif_list(pool)[:GIPHY_FETCH_POOL_SIZE]
+        gifs = _filter_and_select_gifs_for_artist(artist, gif_pool)
         logger.info(f"Offline GIF bank: returned {len(gifs)} GIFs")
     
     # Add enriched fields to deck data
@@ -284,6 +494,9 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     enriched_deck['keyword_scores'] = keyword_scores
     enriched_deck['key_characteristics'] = key_characteristics
     enriched_deck['gifs'] = gifs
+    enriched_deck['gif_pool'] = gif_pool
+    enriched_deck['giphy_query'] = query
+    enriched_deck['giphy_query_parts'] = query_parts[:2]
     
     return enriched_deck
 
@@ -360,8 +573,29 @@ def process_metadata_update(file_path: str):
     active_deck_changed = current_active_deck != _last_active_deck
     
     # Also check if active deck doesn't have enriched fields yet
+    # OR if enriched fields are stale relative to our current safe GIF policy.
     active_deck_data = data.get(current_active_deck, {})
-    needs_enrichment = active_deck_data.get('active', False) and not active_deck_data.get('refined_keywords')
+    if active_deck_data.get('active', False):
+        desired_parts = _build_giphy_query_parts(
+            active_deck_data.get('title'),
+            active_deck_data.get('artist'),
+        )
+
+        # Require basic enrichment fields to exist
+        has_keywords = bool(active_deck_data.get('refined_keywords'))
+
+        # Enforce our safe policy: never keep MORE than N gifs once we have an artist query.
+        # Do not require exactly N (Giphy/offline may return fewer), otherwise we'd loop.
+        gifs = active_deck_data.get('gifs')
+        gifs_ok = isinstance(gifs, list) and (len(gifs) <= GIPHY_GIFS_PER_TRACK if desired_parts else True)
+
+        # Require query parts to match our intended [title, artist]
+        qp = active_deck_data.get('giphy_query_parts')
+        qp_ok = (isinstance(qp, list) and qp[:2] == desired_parts) if desired_parts else True
+
+        needs_enrichment = (not has_keywords) or (not gifs_ok) or (not qp_ok)
+    else:
+        needs_enrichment = False
     
     # Process if content changed OR if active status changed OR if active deck changed OR needs enrichment
     if not content_changed and not active_status_changed and not active_deck_changed and not needs_enrichment:
@@ -434,7 +668,11 @@ def process_metadata_update(file_path: str):
             }
         else:
             # Same track - update current enriched if needed
-            if not current_enriched or not current_enriched.get('refined_keywords'):
+            if (
+                not current_enriched
+                or not current_enriched.get('refined_keywords')
+                or _enriched_gif_policy_stale(deck_data, current_enriched)
+            ):
                 # No current enriched data, create it
                 new_enriched = enrich_deck_data(deck_data)
                 deck_data['current_enriched'] = new_enriched
@@ -460,6 +698,9 @@ def process_metadata_update(file_path: str):
             deck_data['keyword_scores'] = current.get('keyword_scores', {})
             deck_data['key_characteristics'] = current.get('key_characteristics', [])
             deck_data['gifs'] = current.get('gifs', [])
+            deck_data['gif_pool'] = current.get('gif_pool', [])
+            deck_data['giphy_query'] = current.get('giphy_query')
+            deck_data['giphy_query_parts'] = current.get('giphy_query_parts', [])
             logger.info(
                 f"After merge for {deck_name}: gifs={len(deck_data['gifs'])}, "
                 f"has_current_enriched={'current_enriched' in deck_data}"
