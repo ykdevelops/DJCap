@@ -1,12 +1,18 @@
-# DjCap
+# AudioGiphy
 
-DjCap is a tool that continuously captures the djay Pro application window, extracts track metadata (Deck #, Song Title, Artist Name, BPM, Key) using Apple Vision OCR, and saves it to a JSON file that other applications can monitor.
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-blue)](https://github.com/ykdevelops/AudioGiphy)
+
+AudioGiphy is a real-time DJ metadata capture and visualization system that continuously monitors the djay Pro application window, extracts track metadata (Deck #, Song Title, Artist Name, BPM, Key) using Apple Vision OCR, enriches it with Last.fm tags and Giphy GIFs, and provides a live web-based visualization interface.
 
 ## Features
 
 - **Non-intrusive capture**: Uses Core Graphics API to capture djay Pro window without stealing focus
 - **Apple Vision OCR**: Uses native macOS OCR (via `ocrmac`) for accurate text extraction
-- **Continuous monitoring**: Updates JSON file every few seconds
+- **Continuous monitoring**: Updates JSON file every few seconds with real-time track metadata
+- **Metadata enrichment**: Automatically enriches tracks with Last.fm tags, keywords, and musical key characteristics
+- **GIF integration**: Fetches and manages Giphy GIFs based on artist and track metadata
+- **Rate limiting**: Smart rate limiting for Giphy API to stay within limits
+- **Live web visualization**: Vue.js frontend for real-time visualization of tracks and GIFs
 - **File watching friendly**: JSON file is written atomically for safe file watching
 
 ## Requirements
@@ -32,19 +38,29 @@ pip install -r requirements.txt
 ## Project Structure
 
 ```
-DjCap/
+AudioGiphy/
 ├── src/                    # Core modules
 │   ├── window_capture.py   # Window capture functionality
 │   ├── metadata_extractor.py  # OCR and metadata extraction
-│   └── config.py           # Configuration and API keys
+│   ├── config.py           # Configuration and API keys
+│   ├── gif_bank.py         # GIF bank management
+│   └── key_translator.py   # Musical key translation
 ├── tools/                  # Utility scripts
 │   ├── define_regions.py   # Interactive region definition tool
+│   ├── define_play_buttons.py  # Play button calibration
 │   └── save_all_regions.py # Save region screenshots
+├── frontend/               # Web frontend
+│   ├── server.py          # Frontend web server
+│   ├── index.html         # Main visualization page
+│   └── viewer.html        # Alternative viewer
 ├── debug/                  # Debug scripts and test images
 ├── data/                   # Data files
 │   ├── region_coordinates.json  # OCR region coordinates
+│   ├── gif_bank/          # GIF bank storage
 │   └── output/            # Output JSON files
 │       ├── djcap_output.json
+│       ├── giphy_history.json
+│       └── giphy_rate_state.json
 ├── djcap.py               # Main capture service
 ├── djcap_processor.py     # Metadata enrichment service
 └── requirements.txt       # Python dependencies
