@@ -7,6 +7,7 @@ import http.server
 import socketserver
 import json
 import os
+import logging
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -73,7 +74,7 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
 
     def serve_dance_video(self, filename: str):
-        """Serve dance video files from the dance_mp4_bank folder."""
+        """Serve dance video files from the dance_mp4_bank folder, with trimming support for repeated segments."""
         try:
             # Security: only allow .mp4 files and prevent directory traversal
             if not filename.endswith('.mp4') or '..' in filename or '/' in filename:
@@ -88,7 +89,78 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
             
-            # Serve the video file
+            # Check for trim information (if video has repeated segments)
+            trim_duration = None
+            try:
+                from src.video_trimming import get_video_trim_info
+                trim_duration = get_video_trim_info(video_path)
+            except Exception as e:
+                # If trimming module fails, just serve full file
+                pass
+            
+            # If trimming is needed, use ffmpeg to serve only the trimmed portion
+            if trim_duration is not None and trim_duration > 0:
+                import subprocess
+                
+                try:
+                    # Use ffmpeg to extract and serve only the trimmed portion
+                    # Using re-encoding for better compatibility (fragmented MP4)
+                    cmd = [
+                        'ffmpeg',
+                        '-i', str(video_path),
+                        '-t', str(trim_duration),
+                        '-c:v', 'libx264',  # Re-encode for compatibility
+                        '-preset', 'ultrafast',  # Fast encoding
+                        '-crf', '28',  # Lower quality for speed
+                        '-c:a', 'aac',  # Audio codec
+                        '-f', 'mp4',
+                        '-movflags', 'frag_keyframe+empty_moov',  # Streaming-friendly format
+                        '-'  # Output to stdout
+                    ]
+                    
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,  # Suppress ffmpeg logs
+                        bufsize=8192
+                    )
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'video/mp4')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Cache-Control', 'public, max-age=3600')
+                    self.end_headers()
+                    
+                    # Stream the trimmed video
+                    try:
+                        while True:
+                            chunk = process.stdout.read(8192)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                        process.wait()
+                    except (BrokenPipeError, ConnectionResetError):
+                        # Client disconnected, kill process
+                        process.kill()
+                        process.wait()
+                        return
+                    except Exception:
+                        process.kill()
+                        process.wait()
+                        raise
+                    
+                    if process.returncode != 0:
+                        raise Exception("ffmpeg failed")
+                    
+                    return  # Successfully served trimmed video
+                    
+                except Exception as e:
+                    # Fallback: serve full file if trimming fails
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to trim video {filename}, serving full file: {e}")
+                    # Continue to serve full file below
+            
+            # No trimming needed or trimming failed, serve full file
             self.send_response(200)
             self.send_header('Content-Type', 'video/mp4')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -97,6 +169,7 @@ class DjcapHandler(http.server.SimpleHTTPRequestHandler):
             
             with open(video_path, 'rb') as f:
                 self.wfile.write(f.read())
+                    
         except Exception as e:
             self.send_response(500)
             self.end_headers()

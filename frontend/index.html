@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DjCap - Live Track Visualization</title>
+    <title>AudioGiphy - Live Track Visualization</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <style>
         * {
@@ -60,6 +60,13 @@
             grid-template-columns: 1fr 2fr;
             gap: 20px;
             margin-bottom: 20px;
+        }
+
+        .search-previews-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
         }
 
         .card {
@@ -150,6 +157,62 @@
             width: 100%;
             height: 100%;
             object-fit: contain;
+            transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out, filter 0.15s ease-in-out, clip-path 0.15s ease-in-out;
+        }
+        
+        /* Transition types - each video gets a unique one */
+        .gif-image.fade-out { opacity: 0; }
+        .gif-image.fade-in { opacity: 1; }
+        
+        .gif-image.slide-left-out { transform: translateX(-100%); opacity: 0; }
+        .gif-image.slide-left-in { transform: translateX(0); opacity: 1; }
+        
+        .gif-image.slide-right-out { transform: translateX(100%); opacity: 0; }
+        .gif-image.slide-right-in { transform: translateX(0); opacity: 1; }
+        
+        .gif-image.slide-up-out { transform: translateY(-100%); opacity: 0; }
+        .gif-image.slide-up-in { transform: translateY(0); opacity: 1; }
+        
+        .gif-image.slide-down-out { transform: translateY(100%); opacity: 0; }
+        .gif-image.slide-down-in { transform: translateY(0); opacity: 1; }
+        
+        .gif-image.zoom-out-out { transform: scale(0.5); opacity: 0; }
+        .gif-image.zoom-out-in { transform: scale(1); opacity: 1; }
+        
+        .gif-image.zoom-in-out { transform: scale(1.5); opacity: 0; }
+        .gif-image.zoom-in-in { transform: scale(1); opacity: 1; }
+        
+        .gif-image.rotate-out { transform: rotate(90deg) scale(0.8); opacity: 0; }
+        .gif-image.rotate-in { transform: rotate(0deg) scale(1); opacity: 1; }
+        
+        .gif-image.blur-out { filter: blur(10px); opacity: 0; }
+        .gif-image.blur-in { filter: blur(0); opacity: 1; }
+        
+        .gif-image.flip-x-out { transform: scaleX(0); opacity: 0; }
+        .gif-image.flip-x-in { transform: scaleX(1); opacity: 1; }
+        
+        .gif-image.flip-y-out { transform: scaleY(0); opacity: 0; }
+        .gif-image.flip-y-in { transform: scaleY(1); opacity: 1; }
+        
+        .gif-image.diagonal-out { transform: translate(-100%, 100%) rotate(-45deg); opacity: 0; }
+        .gif-image.diagonal-in { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+        
+        .gif-image.wipe-out { 
+            clip-path: inset(0 100% 0 0);
+            opacity: 0;
+        }
+        .gif-image.wipe-in { 
+            clip-path: inset(0 0 0 0);
+            opacity: 1;
+        }
+        
+        .gif-image.circle-out { 
+            clip-path: circle(0% at 50% 50%);
+            opacity: 0;
+        }
+        .gif-image.circle-in { 
+            clip-path: circle(100% at 50% 50%);
+            opacity: 1;
         }
 
         .gif-counter {
@@ -245,7 +308,7 @@
     <div id="app">
         <div class="container">
             <div class="header">
-                <h1>🎧 DjCap Live</h1>
+                <h1>🎧 AudioGiphy Live</h1>
                 <div :class="['status', isConnected ? 'connected' : 'disconnected']">
                     {{ isConnected ? '● Connected' : '○ Disconnected' }}
                 </div>
@@ -353,32 +416,50 @@
                     </div>
                 </div>
 
-                <!-- GIF Search Preview (swapped position with Visuals) -->
-                <div class="card" v-if="activeDeckData">
-                    <h2>🎬 GIF Search Preview</h2>
-                    <div class="tags-section">
-                        <h3 style="margin-top: 10px; margin-bottom: 10px; color: #667eea;">Search Keywords</h3>
-                        <div class="tags">
-                            <span v-for="keyword in gifKeywords"
-                                  :key="keyword"
-                                  class="tag keyword">
-                                "{{ keyword }}"
-                            </span>
-                        </div>
-                    </div>
-                    <div class="tags-section" style="margin-top: 15px;">
-                        <p style="color: #4ec9b0; font-weight: 600;">
-                            Found {{ gifCount }} GIF{{ gifCount === 1 ? '' : 's' }} for this track
-                        </p>
-                    </div>
-                </div>
             </div>
 
-            <div v-else class="card">
-                <div class="empty-state">
-                    <div class="empty-state-icon">⏳</div>
-                    <p>Waiting for track data...</p>
-                    <p style="margin-top: 10px; font-size: 0.9em;">Make sure djcap.py and djcap_processor.py are running.</p>
+            <!-- Search Previews Row -->
+            <div class="search-previews-row" v-if="activeDeckData">
+                    <!-- GIPHY Search Preview -->
+                    <div class="card">
+                        <h2>🎬 GIPHY Search Preview</h2>
+                        <div class="tags-section">
+                            <h3 style="margin-top: 10px; margin-bottom: 10px; color: #667eea;">Search Keywords</h3>
+                            <div class="tags">
+                                <span v-for="keyword in gifKeywords"
+                                      :key="keyword"
+                                      class="tag keyword">
+                                    "{{ keyword }}"
+                                </span>
+                            </div>
+                        </div>
+                        <div class="tags-section" style="margin-top: 15px;">
+                            <p style="color: #4ec9b0; font-weight: 600;">
+                                Found {{ gifCount }} GIF{{ gifCount === 1 ? '' : 's' }} for this track
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Google Search Preview -->
+                    <div class="card">
+                        <h2>🔍 Google Search Preview</h2>
+                        <div class="tags-section">
+                            <h3 style="margin-top: 10px; margin-bottom: 10px; color: #4285f4;">Search Query</h3>
+                            <div class="tags">
+                                <span v-for="keyword in googleKeywords"
+                                      :key="keyword"
+                                      class="tag"
+                                      style="background: #4285f4;">
+                                    "{{ keyword }}"
+                                </span>
+                            </div>
+                        </div>
+                        <div class="tags-section" style="margin-top: 15px;">
+                            <p style="color: #34a853; font-weight: 600;">
+                                Google API: {{ googleKeywords.length > 0 ? 'Active' : 'Not configured' }}
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -416,9 +497,12 @@
                     gifPool: [],
                     bannedGifIds: [],
                     gifKeywords: [],
+                    googleKeywords: [],
                     lastGifTrackId: null,
                     activeVideoRef: null,
-                    gifTimeoutId: null
+                    gifTimeoutId: null,
+                    videoTimeoutId: null,
+                    playedVideoIds: [] // Track videos that have been played to avoid repeats
                 };
             },
             computed: {
@@ -508,6 +592,12 @@
                 if (this.gifCycleInterval) {
                     clearInterval(this.gifCycleInterval);
                 }
+                if (this.gifTimeoutId) {
+                    clearTimeout(this.gifTimeoutId);
+                }
+                if (this.videoTimeoutId) {
+                    clearTimeout(this.videoTimeoutId);
+                }
             },
             methods: {
                 debugState() {
@@ -526,6 +616,7 @@
                         this.gifPool = [];
                         this.bannedGifIds = [];
                         this.gifKeywords = [];
+                        this.googleKeywords = [];
                         this.lastGifTrackId = null;
                         // Clear any existing GIF cycle when no valid track
                         this.startGifCycle();
@@ -533,12 +624,23 @@
                     }
 
                     const trackId = `${deck.title}|${deck.artist}|${deck.key || ''}`;
-                    if (this.lastGifTrackId === trackId && this.gifs && this.gifs.length > 0) {
-                        // Already have GIFs for this track
+                    
+                    // Reset played videos when track changes
+                    if (this.lastGifTrackId !== trackId) {
+                        this.playedVideoIds = [];
+                    }
+                    
+                    // Always update GIFs from the API, even if track hasn't changed
+                    // This ensures we get the latest data including all 15 items
+                    const newGifs = Array.isArray(deck.gifs) ? deck.gifs : [];
+                    
+                    // Only skip if it's the exact same track AND we already have the correct number of items
+                    if (this.lastGifTrackId === trackId && this.gifs && this.gifs.length === newGifs.length && newGifs.length > 0) {
+                        // Already have GIFs for this track with correct count
                         return;
                     }
 
-                    this.gifs = Array.isArray(deck.gifs) ? deck.gifs : [];
+                    this.gifs = newGifs;
                     this.gifPool = Array.isArray(deck.gif_pool) && deck.gif_pool.length > 0 ? deck.gif_pool : (Array.isArray(deck.gifs) ? deck.gifs : []);
                     this.bannedGifIds = [];
 
@@ -548,6 +650,23 @@
                     } else {
                         const a = deck.artist ? String(deck.artist) : 'Unknown Artist';
                         this.gifKeywords = [a];
+                    }
+
+                    // Show Google search query: ["artist ArtistName", "Title", "music video"]
+                    if (Array.isArray(deck.google_query_parts) && deck.google_query_parts.length >= 1) {
+                        // Backend sends: ["artist ArtistName", "Title", "music video"]
+                        this.googleKeywords = deck.google_query_parts.map(String);
+                    } else {
+                        // Fallback: build query from "artist" + artist name, title, and "music video"
+                        const fallbackKeywords = [];
+                        if (deck.artist) {
+                            fallbackKeywords.push(`artist ${String(deck.artist)}`);
+                        }
+                        if (deck.title) {
+                            fallbackKeywords.push(String(deck.title));
+                        }
+                        fallbackKeywords.push("music video");
+                        this.googleKeywords = fallbackKeywords.length > 0 ? fallbackKeywords : ['Not configured'];
                     }
                     this.lastGifTrackId = trackId;
 
@@ -666,10 +785,23 @@
                     
                     // Only start cycling if we have more than 1 GIF
                     if (this.gifCount > 1) {
-                        // Start cycling: 1 GIF per second
+                        // Use same 2-bar duration for all clips (consistent with GIF and video timeouts)
+                        // 2 bars = 8 beats (1 bar = 4 beats)
+                        const bpm = this.activeDeckData?.bpm || 120;
+                        const beatsPerBar = 4;
+                        const bars = 2; // 2 bars for all clips
+                        const beats = bars * beatsPerBar; // 8 beats
+                        const clipDurationSeconds = (beats / bpm) * 60; // Duration in seconds
+                        const interval = Math.max(250, Math.min(4000, clipDurationSeconds * 1000)); // Convert to ms, clamp 250ms-4s
+                        
+                        // Start cycling with consistent 2-bar interval
+                        // This is a fallback that should rarely trigger since GIFs/videos have their own timeouts
                         this.gifCycleInterval = setInterval(() => {
-                            this.cycleToNextGif();
-                        }, 1000);
+                            // Only advance if current item is NOT a video (videos advance via their own timeout)
+                            if (!this.currentGifVideoUrl) {
+                                this.cycleToNextGif();
+                            }
+                        }, interval);
                     }
                 },
                 cycleToNextGif() {
@@ -680,10 +812,206 @@
                     // Direct clip-to-clip transition
                     this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
                 },
+                advanceGif() {
+                    // Advance to next GIF/video, skipping videos that have already been played
+                    if (!this.activeDeckData || this.gifCount === 0) {
+                        return;
+                    }
+                    
+                    // Track the current item if it's a video
+                    const currentItem = this.currentGif;
+                    if (currentItem && this.currentGifVideoUrl) {
+                        const videoId = this.getGifId(currentItem);
+                        if (videoId && !this.playedVideoIds.includes(videoId)) {
+                            this.playedVideoIds.push(videoId);
+                        }
+                    }
+                    
+                    // Find next available item (skip played videos)
+                    const startIndex = (this.currentGifIndex + 1) % this.gifCount;
+                    let nextIndex = startIndex;
+                    let attempts = 0;
+                    
+                    while (attempts < this.gifCount) {
+                        const nextItem = this.gifs[nextIndex];
+                        if (!nextItem) break;
+                        
+                        // Check if it's a video that's been played
+                        const nextItemUrl = nextItem.url || '';
+                        const nextItemMime = (nextItem.mime || '').toLowerCase();
+                        const isVideo = nextItemMime.startsWith('video/') || nextItemUrl.toLowerCase().endsWith('.mp4');
+                        
+                        if (isVideo) {
+                            const videoId = this.getGifId(nextItem);
+                            if (videoId && this.playedVideoIds.includes(videoId)) {
+                                // Skip this played video
+                                nextIndex = (nextIndex + 1) % this.gifCount;
+                                attempts++;
+                                continue;
+                            }
+                        }
+                        
+                        // Found a valid item
+                        break;
+                    }
+                    
+                    // Apply transition effect (unique for each video)
+                    this.applyTransition(() => {
+                        this.currentGifIndex = nextIndex;
+                    }, nextIndex);
+                },
+                getTransitionType(index) {
+                    // Get the item at the index to check if it's a video
+                    const item = this.gifs[index];
+                    const isVideo = item && (item.mime === 'video/mp4' || item.source === 'dance_mp4_bank' || (item.url || '').toLowerCase().endsWith('.mp4'));
+                    
+                    if (isVideo) {
+                        // Cycle through directional slides: up -> left -> down -> right -> repeat
+                        const directionCycle = ['slide-up', 'slide-left', 'slide-down', 'slide-right'];
+                        // Find the video's position in the video list (only count videos)
+                        let videoIndex = 0;
+                        for (let i = 0; i <= index; i++) {
+                            const checkItem = this.gifs[i];
+                            if (checkItem && (checkItem.mime === 'video/mp4' || checkItem.source === 'dance_mp4_bank' || (checkItem.url || '').toLowerCase().endsWith('.mp4'))) {
+                                if (i === index) {
+                                    break;
+                                }
+                                videoIndex++;
+                            }
+                        }
+                        return directionCycle[videoIndex % directionCycle.length];
+                    } else {
+                        // GIFs use fade transition
+                        return 'fade';
+                    }
+                },
+                applyTransition(callback, nextIndex) {
+                    // Transition duration (150ms) for better rhythm alignment
+                    const transitionDuration = 150;
+                    
+                    // Get transition type for the next item
+                    const transitionType = this.getTransitionType(nextIndex);
+                    const isVideo = this.gifs[nextIndex] && (
+                        this.gifs[nextIndex].mime === 'video/mp4' || 
+                        this.gifs[nextIndex].source === 'dance_mp4_bank' || 
+                        (this.gifs[nextIndex].url || '').toLowerCase().endsWith('.mp4')
+                    );
+                    
+                    // Determine CSS classes based on transition type
+                    let outClass, inClass;
+                    if (transitionType === 'fade') {
+                        outClass = 'fade-out';
+                        inClass = 'fade-in';
+                    } else if (transitionType === 'slide-left') {
+                        outClass = 'slide-left-out';
+                        inClass = 'slide-left-in';
+                    } else if (transitionType === 'slide-right') {
+                        outClass = 'slide-right-out';
+                        inClass = 'slide-right-in';
+                    } else if (transitionType === 'slide-up') {
+                        outClass = 'slide-up-out';
+                        inClass = 'slide-up-in';
+                    } else if (transitionType === 'slide-down') {
+                        outClass = 'slide-down-out';
+                        inClass = 'slide-down-in';
+                    } else if (transitionType === 'zoom-out') {
+                        outClass = 'zoom-out-out';
+                        inClass = 'zoom-out-in';
+                    } else if (transitionType === 'zoom-in') {
+                        outClass = 'zoom-in-out';
+                        inClass = 'zoom-in-in';
+                    } else if (transitionType === 'rotate') {
+                        outClass = 'rotate-out';
+                        inClass = 'rotate-in';
+                    } else if (transitionType === 'blur') {
+                        outClass = 'blur-out';
+                        inClass = 'blur-in';
+                    } else if (transitionType === 'flip-x') {
+                        outClass = 'flip-x-out';
+                        inClass = 'flip-x-in';
+                    } else if (transitionType === 'flip-y') {
+                        outClass = 'flip-y-out';
+                        inClass = 'flip-y-in';
+                    } else if (transitionType === 'diagonal') {
+                        outClass = 'diagonal-out';
+                        inClass = 'diagonal-in';
+                    } else if (transitionType === 'wipe') {
+                        outClass = 'wipe-out';
+                        inClass = 'wipe-in';
+                    } else if (transitionType === 'circle') {
+                        outClass = 'circle-out';
+                        inClass = 'circle-in';
+                    } else {
+                        // Fallback to fade
+                        outClass = 'fade-out';
+                        inClass = 'fade-in';
+                    }
+                    
+                    // Apply transition out to current media
+                    const mediaElements = document.querySelectorAll('.gif-image');
+                    mediaElements.forEach(el => {
+                        // Remove any existing transition classes
+                        el.classList.remove('fade-out', 'fade-in',
+                            'slide-left-out', 'slide-left-in',
+                            'slide-right-out', 'slide-right-in',
+                            'slide-up-out', 'slide-up-in',
+                            'slide-down-out', 'slide-down-in',
+                            'zoom-out-out', 'zoom-out-in',
+                            'zoom-in-out', 'zoom-in-in',
+                            'rotate-out', 'rotate-in',
+                            'blur-out', 'blur-in',
+                            'flip-x-out', 'flip-x-in',
+                            'flip-y-out', 'flip-y-in',
+                            'diagonal-out', 'diagonal-in',
+                            'wipe-out', 'wipe-in',
+                            'circle-out', 'circle-in'
+                        );
+                        el.classList.add(outClass);
+                    });
+                    
+                    // After transition out completes, change media and transition in
+                    setTimeout(() => {
+                        callback();
+                        this.$nextTick(() => {
+                            const newMediaElements = document.querySelectorAll('.gif-image');
+                            newMediaElements.forEach(el => {
+                                // Remove any existing transition classes
+                                el.classList.remove('fade-out', 'fade-in',
+                                    'slide-left-out', 'slide-left-in',
+                                    'slide-right-out', 'slide-right-in',
+                                    'slide-up-out', 'slide-up-in',
+                                    'slide-down-out', 'slide-down-in',
+                                    'zoom-out-out', 'zoom-out-in',
+                                    'zoom-in-out', 'zoom-in-in',
+                                    'rotate-out', 'rotate-in',
+                                    'blur-out', 'blur-in',
+                                    'flip-x-out', 'flip-x-in',
+                                    'flip-y-out', 'flip-y-in',
+                                    'diagonal-out', 'diagonal-in',
+                                    'wipe-out', 'wipe-in',
+                                    'circle-out', 'circle-in'
+                                );
+                                el.classList.add(inClass);
+                                
+                                // Remove transition-in class after transition completes
+                                setTimeout(() => {
+                                    el.classList.remove(inClass);
+                                }, transitionDuration);
+                            });
+                        });
+                    }, transitionDuration);
+                },
                 onGifLoad() {
                     const bpm = this.activeDeckData?.bpm || 120;
-                    const bpmFactor = bpm / 120;
-                    const duration = Math.max(500, 2000 / bpmFactor);
+                    // Use same 2-bar duration as videos for consistency
+                    // 2 bars = 8 beats (1 bar = 4 beats)
+                    const beatsPerBar = 4;
+                    const bars = 2; // 2 bars for all clips
+                    const beats = bars * beatsPerBar; // 8 beats
+                    const durationSeconds = (beats / bpm) * 60; // Duration in seconds
+                    const durationMs = durationSeconds * 1000; // Convert to milliseconds
+                    const duration = Math.max(250, durationMs); // Minimum 250ms
+                    
                     this.resetGifTimers();
                     this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
                 },
@@ -691,6 +1019,10 @@
                     if (this.gifTimeoutId) {
                         clearTimeout(this.gifTimeoutId);
                         this.gifTimeoutId = null;
+                    }
+                    if (this.videoTimeoutId) {
+                        clearTimeout(this.videoTimeoutId);
+                        this.videoTimeoutId = null;
                     }
                     this.activeVideoRef = null;
                 },
@@ -713,10 +1045,33 @@
                     video.loop = false;
                     video.muted = true;
                     this.resetGifTimers();
-                    console.log(`Video loaded, playback rate set to ${rate.toFixed(2)}x for BPM ${bpm}`);
+                    
+                    // Video duration: BPM-adaptive with 2 second maximum
+                    // 2 beats = 2 * (60 / BPM) seconds, but cap at 2 seconds max
+                    const beatsPerBar = 4;
+                    const videoBeats = 2; // 2 beats per video (half a bar)
+                    const durationSeconds = (videoBeats / bpm) * 60; // Duration in seconds
+                    const clipDurationMs = Math.max(200, Math.min(2000, durationSeconds * 1000)); // Clamp 200ms-2s (max 2 seconds)
+                    
+                    // Set timeout to advance after 2 beats
+                    this.videoTimeoutId = setTimeout(() => {
+                        if (video && !video.paused) {
+                            video.pause();
+                        }
+                        this.advanceGif();
+                    }, clipDurationMs);
+                    
+                    const videoNaturalDuration = video.duration || 0;
+                    console.log(`Video loaded: BPM ${bpm}, rate ${rate.toFixed(2)}x, natural duration ${videoNaturalDuration.toFixed(2)}s, clip duration ${durationSeconds.toFixed(2)}s (2 beats)`);
                     video.play().catch(() => {});
                 },
                 onVideoEnded() {
+                    // Fallback: if video ends naturally before timeout, advance
+                    // This can happen if video is shorter than 2 bars
+                    if (this.videoTimeoutId) {
+                        clearTimeout(this.videoTimeoutId);
+                        this.videoTimeoutId = null;
+                    }
                     this.advanceGif();
                 },
             }

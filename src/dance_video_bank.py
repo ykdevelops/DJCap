@@ -37,12 +37,13 @@ def _get_video_list() -> List[Path]:
     return videos
 
 
-def get_dance_videos(count: int = 5) -> List[Dict[str, Any]]:
+def get_dance_videos(count: int = 5, filter_similar: bool = False) -> List[Dict[str, Any]]:
     """
     Return random videos from the dance video bank.
     
     Args:
         count: Number of videos to return
+        filter_similar: If True, filter out visually similar videos
         
     Returns:
         List of video dicts with id, url, title, mime, etc.
@@ -53,11 +54,14 @@ def get_dance_videos(count: int = 5) -> List[Dict[str, Any]]:
         logger.warning("No videos available in dance video bank")
         return []
     
-    if len(videos) < count:
-        logger.warning(f"Only {len(videos)} videos available, requested {count}")
+    # Select more videos than needed if we're filtering similar ones
+    select_count = count * 2 if filter_similar else count
+    
+    if len(videos) < select_count:
+        logger.warning(f"Only {len(videos)} videos available, requested {select_count}")
         selected = videos
     else:
-        selected = random.sample(videos, count)
+        selected = random.sample(videos, select_count)
     
     result = []
     for video_path in selected:
@@ -73,6 +77,17 @@ def get_dance_videos(count: int = 5) -> List[Dict[str, Any]]:
             "tags": ["dance", "offline"]
         }
         result.append(video_dict)
+    
+    # Filter out similar videos if requested
+    if filter_similar:
+        try:
+            from src.video_similarity import filter_similar_videos
+            result = filter_similar_videos(result)
+        except Exception as e:
+            logger.warning(f"Error filtering similar videos, using all selected: {e}")
+    
+    # Take only the requested count
+    result = result[:count]
     
     logger.info(f"Selected {len(result)} videos from dance video bank")
     return result

@@ -12,11 +12,13 @@ AudioGiphy is a real-time DJ metadata capture and visualization system that cont
 - **Metadata enrichment**: Automatically enriches tracks with Last.fm tags, keywords, and musical key characteristics
 - **GIF integration**: Fetches and manages Giphy GIFs based on artist metadata
 - **Dance video bank**: Integrates offline dance video library for visual variety
-- **Interleaved media rotation**: 10-item rotation (5 GIFs from Giphy + 5 videos from dance bank)
+- **Interleaved media rotation**: 15-item rotation (5 Giphy GIFs + 5 Google GIFs + 5 videos, or 10 Giphy GIFs + 5 videos if Google API unavailable)
 - **BPM-synced video playback**: Videos automatically adjust playback rate to match track BPM
+- **Fixed video duration**: Videos play for exactly 1 second with smooth directional slide transitions
+- **Unique video transitions**: Each video uses a unique directional slide transition (up → left → down → right, cycling)
 - **Rate limiting**: Smart rate limiting for Giphy API to stay within limits
+- **Fallback logic**: Automatically uses videos to fill rotation when GIFs are unavailable (rate limited or API issues)
 - **Live web visualization**: Vue.js frontend for real-time visualization of tracks, GIFs, and videos
-- **Direct clip transitions**: Seamless clip-to-clip transitions without fade effects
 - **Auto-cleanup**: Automatic output folder cleanup to manage file sizes
 - **File watching friendly**: JSON file is written atomically for safe file watching
 - **Server management**: Convenient scripts to start/stop/restart all services
@@ -161,7 +163,18 @@ The metadata processor service watches `djcap_output.json` for changes and enric
 ```bash
 LASTFM_API_KEY=your_lastfm_api_key
 GIPHY_API_KEY=your_giphy_api_key
+GOOGLE_API_KEY=your_google_api_key
+GOOGLE_CSE_ID=your_google_custom_search_engine_id
 ```
+
+**Google Custom Search Setup:**
+- Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project
+- Enable the "Custom Search API"
+- Create an API key in "APIs & Services" > "Credentials"
+- Go to [Programmable Search Engine](https://cse.google.com/cse/all) and create a new search engine
+- Set it to "Search the entire web" and enable "Image search"
+- Copy the Search Engine ID (cx parameter)
+- Add both `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` to your `.env` file
 
 Alternatively, the processor will try to use API keys from AudioApis if available.
 
@@ -191,21 +204,37 @@ The processor will:
 
 ### Media Rotation (GIFs + Videos)
 
-- **Rotation size**: 10 items per track (5 GIFs + 5 videos)
-- **GIFs**: Fetched from Giphy API based on artist name
+- **Rotation size**: 15 items per track total
+  - **If Google API available**: 5 Giphy GIFs + 5 Google GIFs + 5 videos = 15 items
+  - **If Google API unavailable**: 10 Giphy GIFs + 5 videos = 15 items
+  - **If GIFs unavailable (rate limited)**: Uses up to 15 videos to maintain 15-item rotation
+- **GIF sources**:
+  - **Giphy**: Fetched from Giphy API based on artist name (primary source)
+  - **Google**: Fetched from Google Custom Search API (secondary source, requires API key and CSE ID)
 - **Videos**: Randomly selected from offline dance video bank (`data/dance_mp4_bank/`)
-- **Interleaving**: Pattern alternates GIF, video, GIF, video, etc. (videos on even positions: 2, 4, 6, 8, 10)
+- **Interleaving**: 
+  - With Google: Pattern is [Giphy GIF, video, Google GIF, Giphy GIF, video, Google GIF, ...]
+  - Without Google: Pattern alternates [Giphy GIF, video, Giphy GIF, video, ...]
+- **Video duration**: Fixed at 1 second per video clip
 - **BPM sync**: Videos automatically adjust playback rate to match track BPM (rate = BPM / 120)
-- **Transitions**: Direct clip-to-clip transitions (no fade effects)
+- **Video transitions**: Each video uses a unique directional slide transition:
+  - Cycles through: slide-up → slide-left → slide-down → slide-right → (repeats)
+  - Transitions are 150ms for smooth, rhythmic alignment
+- **GIF transitions**: GIFs use fade transitions (150ms)
 
 ### GIF behavior (safe defaults)
 
-- **Search query**: artist-only (broad and consistent)
-- **GIF pool**: 5 GIFs per track from Giphy API
-- **Video pool**: 5 videos per track from dance video bank
+- **Search query**: 
+  - **Giphy**: artist-only (broad and consistent)
+  - **Google**: "artist [ArtistName] [SongTitle] music video" (more specific)
+- **GIF sources**: 
+  - **Primary**: Giphy API (fetches up to 5-10 GIFs depending on Google availability)
+  - **Secondary**: Google Custom Search API (fetches 5 GIFs if API key is configured)
+- **Video pool**: 5 videos per track from dance video bank (increases to 15 if GIFs unavailable)
 - **Pool**: a larger per-track pool (`gif_pool`) is fetched once per track so the UI can replace disliked GIFs without extra API calls
-- **Rate limiting**: live Giphy calls are capped per rolling hour; state is saved to `data/output/giphy_rate_state.json`
+- **Rate limiting**: live Giphy calls are capped per rolling hour (default: 40/hour); state is saved to `data/output/giphy_rate_state.json`
 - **Repeat avoidance**: recently used GIF IDs are tracked per artist in `data/output/giphy_history.json`
+- **Fallback behavior**: If GIFs are unavailable (rate limited or API errors), the system automatically uses more videos to maintain the 15-item rotation
 
 ### Output Format
 
@@ -359,11 +388,15 @@ The frontend will:
 - **Real-time Updates**: Automatically polls for new data every 2 seconds
 - **Track Information**: Shows title, artist, BPM, and key
 - **Tags & Keywords**: Displays Last.fm tags and refined keywords
-- **Media Visuals**: Cycles through 10 items (5 GIFs + 5 videos) for the current track
+- **Search Query Preview**: Shows Giphy and Google search queries being used
+- **Media Visuals**: Cycles through 15 items (GIFs + videos) for the current track
 - **BPM-synced Playback**: Videos automatically adjust playback speed to match track BPM
-- **Direct Transitions**: Seamless clip-to-clip transitions without fade effects
+- **Video Transitions**: Each video uses unique directional slide transitions (up, left, down, right) cycling through the rotation
+- **Video Duration**: Fixed 1-second clips for consistent rhythm
+- **GIF Transitions**: Smooth fade transitions (150ms)
 - **Replace Media**: Click a numbered slot under the visuals to remove that item from rotation; it is replaced immediately from `gif_pool` (no extra API calls)
 - **Video Support**: Automatically detects and plays MP4 videos from the dance video bank
+- **No Video Repeats**: Videos won't repeat within the same track rotation
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## License

@@ -45,6 +45,10 @@ LASTFM_API_KEY = os.getenv('LASTFM_API_KEY', '')
 # Giphy API credentials
 GIPHY_API_KEY = os.getenv('GIPHY_API_KEY', '')
 
+# Google Custom Search API credentials
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
+GOOGLE_CSE_ID = os.getenv('GOOGLE_CSE_ID', '')  # Custom Search Engine ID
+
 # If keys are empty, try to import from AudioApis config as fallback
 if not LASTFM_API_KEY or not GIPHY_API_KEY:
     try:

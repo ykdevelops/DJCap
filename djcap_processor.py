@@ -39,7 +39,7 @@ def _debug_log(location, message, data, hypothesis_id):
 # Load API keys early (loads repo-root `.env` via python-dotenv).
 # Important: AudioApis `metadata.giphy_client` imports its own `config` module and reads
 # `GIPHY_API_KEY` at import time. If we import AudioApis first, it can cache an empty key.
-from src.config import LASTFM_API_KEY, GIPHY_API_KEY
+from src.config import LASTFM_API_KEY, GIPHY_API_KEY, GOOGLE_API_KEY, GOOGLE_CSE_ID
 
 # Add AudioApis to Python path
 AUDIOAPIS_PATH = '/Users/youssefkhalil/AudioApis'
@@ -65,6 +65,73 @@ try:
 except ImportError as e:
     METADATA_MODULES_AVAILABLE = False
     logging.warning(f"AudioApis metadata modules not available: {e}")
+
+# Direct Google Custom Search API implementation for GIFs
+def _fetch_gifs_from_google(query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Fetch GIFs from Google Custom Search API using artist name.
+    Returns list of GIF dicts with id, url, title, tags, etc.
+    """
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID or not query:
+        return []
+    
+    try:
+        import urllib.request
+        import urllib.parse
+        
+        # Google Custom Search API endpoint
+        base_url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "q": query,
+            "cx": GOOGLE_CSE_ID,
+            "key": GOOGLE_API_KEY,
+            "searchType": "image",
+            "imgType": "animated",  # Filter for animated images (GIFs)
+            "num": min(limit, 10),  # Google max is 10 per request
+            "safe": "active"  # Safe search
+        }
+        
+        url = f"{base_url}?{urllib.parse.urlencode(params)}"
+        
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_from_google", "Fetching from Google API", {"query": query, "limit": limit, "url": url.replace(GOOGLE_API_KEY, "***").replace(GOOGLE_CSE_ID, "***")}, "J")
+        # #endregion
+        
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            
+        gifs = []
+        items = data.get("items", [])
+        for item in items[:limit]:
+            # Extract image URL - prefer the link, fallback to image object
+            image_url = item.get("link") or item.get("image", {}).get("url") or ""
+            if not image_url:
+                continue
+                
+            gif = {
+                "id": f"google_{item.get('link', '').split('/')[-1]}" or f"google_{hash(image_url) % 1000000}",
+                "url": image_url,
+                "title": item.get("title", ""),
+                "rating": "g",  # Google safe search ensures this
+                "source": "google",
+                "width": item.get("image", {}).get("width") or 480,
+                "height": item.get("image", {}).get("height") or 270,
+                "tags": []  # Google doesn't provide tags
+            }
+            if gif["url"]:  # Only add if we have a valid URL
+                gifs.append(gif)
+        
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_from_google", "Google API response", {"gifs_count": len(gifs)}, "J")
+        # #endregion
+        
+        return gifs
+    except Exception as e:
+        # #region agent log
+        _debug_log("djcap_processor.py:_fetch_gifs_from_google", "Google API error", {"error": str(e), "error_type": type(e).__name__}, "J")
+        # #endregion
+        logger.warning(f"Error fetching GIFs from Google: {e}")
+        return []
 
 # Direct Giphy API implementation (fallback when AudioApis not available)
 def _fetch_gifs_direct(query: str, limit: int = 25) -> List[Dict[str, Any]]:
@@ -277,10 +344,11 @@ def _save_giphy_history() -> None:
 def _filter_and_select_gifs_for_artist(
     artist: Optional[str],
     gifs: List[Dict[str, Any]],
+    max_count: int = GIPHY_GIFS_PER_TRACK,
 ) -> List[Dict[str, Any]]:
     """
     Prefer GIFs not recently used for the same artist.
-    Returns <= GIPHY_GIFS_PER_TRACK and records selections to history.
+    Returns <= max_count (defaults to GIPHY_GIFS_PER_TRACK) and records selections to history.
     """
     if not gifs:
         return []
@@ -311,7 +379,7 @@ def _filter_and_select_gifs_for_artist(
         else:
             fresh.append(g)
 
-    selected = (fresh + fallback)[:GIPHY_GIFS_PER_TRACK]
+    selected = (fresh + fallback)[:max_count]
 
     if artist_key:
         q = _GIPHY_HISTORY.get(artist_key)
@@ -548,23 +616,33 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
     _debug_log("djcap_processor.py:enrich_deck_data", "Checking existing GIFs", {"existing_query": existing_query, "existing_gifs_count": len(existing_gifs) if isinstance(existing_gifs, list) else 0, "query_match": existing_query == query}, "J")
     # #endregion
     should_reuse = False
+    # Check if we should reuse existing interleaved list (must have 15 items total)
     if isinstance(existing_gifs, list) and existing_gifs and existing_query and existing_query == query:
-        # When reusing, we need to extract only GIFs (not videos) from the interleaved list
-        # Filter out videos (items with mime='video/mp4' or source='dance_mp4_bank')
-        gif_only_list = [g for g in existing_gifs if g.get('mime') != 'video/mp4' and g.get('source') != 'dance_mp4_bank']
-        if len(gif_only_list) >= GIPHY_GIFS_PER_TRACK:
-            gifs = gif_only_list[:GIPHY_GIFS_PER_TRACK]
-            if isinstance(existing_pool, list) and existing_pool:
-                gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
+        # For reuse, we need the full interleaved list with 15 items
+        # Check if we have the expected total count (15 items: 5 Giphy + 5 Google + 5 videos, or 10 Giphy + 5 videos)
+        google_available = bool(GOOGLE_API_KEY and GOOGLE_CSE_ID)
+        expected_total = 15  # Always expect 15 items total
+        
+        if len(existing_gifs) >= expected_total:
+            # Extract only GIFs (not videos) for reuse
+            gif_only_list = [g for g in existing_gifs if g.get('mime') != 'video/mp4' and g.get('source') != 'dance_mp4_bank']
+            required_gifs = 5 if google_available else 10
+            
+            if len(gif_only_list) >= required_gifs:
+                gifs = gif_only_list[:required_gifs]
+                if isinstance(existing_pool, list) and existing_pool:
+                    gif_pool = existing_pool[:GIPHY_FETCH_POOL_SIZE]
+                else:
+                    gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
+                # #region agent log
+                _debug_log("djcap_processor.py:enrich_deck_data", "Reusing existing GIFs", {"gifs_count": len(gifs), "total_items": len(existing_gifs)}, "J")
+                # #endregion
+                logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)}, total interleaved={len(existing_gifs)})")
+                should_reuse = True
             else:
-                gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
-            # #region agent log
-            _debug_log("djcap_processor.py:enrich_deck_data", "Reusing existing GIFs", {"gifs_count": len(gifs)}, "J")
-            # #endregion
-            logger.info(f"Reusing existing GIFs for query='{query}' (count={len(gifs)})")
-            should_reuse = True
+                logger.info(f"Not enough GIFs in existing list ({len(gif_only_list)} < {required_gifs}), will fetch new ones")
         else:
-            logger.info(f"Not enough GIFs in existing list ({len(gif_only_list)}), will fetch new ones")
+            logger.info(f"Existing list has {len(existing_gifs)} items (expected {expected_total}), will fetch new ones")
     
     if not should_reuse and USE_GIPHY_API and GIPHY_API_KEY and search_keywords:
         try:
@@ -587,8 +665,9 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
             # Build pool + select 5 (avoid repeats for same artist)
             gif_pool = _dedupe_gif_list(gifs)[:GIPHY_FETCH_POOL_SIZE]
 
-            # Select up to 5, avoiding recently used GIFs for the same artist.
-            gifs = _filter_and_select_gifs_for_artist(artist, gif_pool)
+            # Select up to 10 GIFs (we need 10 if Google isn't available, or 5 if Google is available)
+            # We'll select 10 to ensure we have enough, then trim later based on Google availability
+            gifs = _filter_and_select_gifs_for_artist(artist, gif_pool, max_count=10)
             # #region agent log
             _debug_log("djcap_processor.py:enrich_deck_data", "Giphy API fetch complete", {"gifs_count": len(gifs), "gif_pool_size": len(gif_pool)}, "J")
             # #endregion
@@ -612,30 +691,141 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
         # #region agent log
         _debug_log("djcap_processor.py:enrich_deck_data", "No GIFs fetched from Giphy API", {"search_keywords": search_keywords}, "J")
         # #endregion
-        logger.info(f"No GIFs available for keywords: {search_keywords}")
+        logger.warning(f"No GIFs available for keywords: {search_keywords}. This will result in fewer than 15 items total.")
     
-    # Get 5 dance videos from offline bank and interleave with GIFs
-    dance_videos = get_dance_videos(count=5)
+    # Get 5 GIFs from Google (always fetch 5, not just as fallback)
+    google_gifs = []
+    # Build google_query: single concatenated string "artist ArtistName Title music video"
+    google_query_parts = []
+    if artist:
+        # Build query parts for display: "artist ArtistName", "Title", and "music video"
+        artist_keyword = f"artist {artist}".strip()
+        google_query_parts.append(artist_keyword)
+        
+        if title:
+            google_query_parts.append(title.strip())
+        
+        # Add "music video" to display parts
+        google_query_parts.append("music video")
+        
+        # Build combined query for API: "artist ArtistName Title music video"
+        query_components = []
+        query_components.append("artist")
+        query_components.append(artist)
+        if title:
+            query_components.append(title.strip())
+        query_components.append("music video")
+        google_query = " ".join(query_components).strip()
+    else:
+        google_query = None
+    
+    logger.info(f"Google query parts (display): {google_query_parts}, combined query: {google_query}")
+    
+    # Only fetch from Google API if credentials are available
+    if GOOGLE_API_KEY and GOOGLE_CSE_ID and google_query:
+        try:
+            logger.info(f"Fetching 5 GIFs from Google for: {google_query}")
+            google_gifs = _fetch_gifs_from_google(google_query, limit=5)
+            logger.info(f"Google API: fetched {len(google_gifs)} GIFs")
+        except Exception as e:
+            logger.warning(f"Error fetching GIFs from Google: {e}")
+    
+    # Get videos from offline bank
+    # If we don't have enough GIFs, use more videos to fill to 15 items
+    google_available = len(google_gifs) >= 5
+    gifs_available = len(gifs) > 0
+    
+    if not gifs_available and not google_available:
+        # No GIFs at all - use 15 videos to fill the rotation
+        video_count = 15
+        logger.info(f"No GIFs available, using {video_count} videos to fill rotation")
+    elif not gifs_available or (not google_available and len(gifs) < 10):
+        # Not enough GIFs - use more videos to reach 15 items
+        # Calculate how many videos we need: 15 - (gifs we have + google gifs we have)
+        needed_videos = 15 - (len(gifs) + len(google_gifs))
+        video_count = max(5, min(15, needed_videos))  # At least 5, at most 15
+        logger.info(f"Not enough GIFs ({len(gifs)} Giphy + {len(google_gifs)} Google), using {video_count} videos to reach 15 items")
+    else:
+        # Normal case: 5 videos
+        video_count = 5
+    
+    dance_videos = get_dance_videos(count=video_count)
     logger.info(f"Dance video bank: selected {len(dance_videos)} videos")
     
-    # Interleave GIFs and videos: GIF, video, GIF, video, etc. (videos on even positions: 2, 4, 6, 8, 10)
-    # Ensure we have exactly 5 GIFs and 5 videos for a total of 10 items
-    gifs_final = gifs[:5]  # Take first 5 GIFs
-    videos_final = dance_videos[:5]  # Take first 5 videos
+    # Prepare sources: Always aim for 15 total items
+    # If Google is available: 5 Giphy + 5 Google + 5 videos = 15
+    # If Google is NOT available: 10 Giphy + 5 videos = 15
+    # If GIFs unavailable: Use videos to fill to 15
+    if len(google_gifs) >= 5:
+        # Use 3 sources: 5 Giphy, 5 Google, 5 videos
+        giphy_gifs = gifs[:5]  # Take first 5 GIFs from Giphy
+        google_gifs_final = google_gifs[:5]  # Take first 5 GIFs from Google
+        videos_final = dance_videos[:5]  # Take first 5 videos
+        
+        # Ensure we have exactly 5 of each for a total of 15
+        if len(giphy_gifs) < 5:
+            logger.warning(f"Only {len(giphy_gifs)} Giphy GIFs available, expected 5")
+        if len(google_gifs_final) < 5:
+            logger.warning(f"Only {len(google_gifs_final)} Google GIFs available, expected 5")
+        if len(videos_final) < 5:
+            logger.warning(f"Only {len(videos_final)} videos available, expected 5")
+        
+        # Interleave: pattern [Giphy GIF, video, Google GIF, Giphy GIF, video, Google GIF, ...]
+        interleaved: List[Dict[str, Any]] = []
+        max_len = max(len(giphy_gifs), len(videos_final), len(google_gifs_final))
+        for i in range(max_len):
+            # Add Giphy GIF first (positions: 1, 4, 7, 10, 13)
+            if i < len(giphy_gifs):
+                interleaved.append(giphy_gifs[i])
+            # Add video second (positions: 2, 5, 8, 11, 14)
+            if i < len(videos_final):
+                interleaved.append(videos_final[i])
+            # Add Google GIF third (positions: 3, 6, 9, 12, 15)
+            if i < len(google_gifs_final):
+                interleaved.append(google_gifs_final[i])
+        
+        # If we still don't have 15 items, pad with more videos
+        video_padding_start = len(videos_final)
+        while len(interleaved) < 15 and video_padding_start < len(dance_videos):
+            interleaved.append(dance_videos[video_padding_start])
+            video_padding_start += 1
+        
+        logger.info(f"Interleaved media: {len(interleaved)} total items ({len(giphy_gifs)} Giphy GIFs + {len(videos_final)} videos + {len(google_gifs_final)} Google GIFs)")
+    else:
+        # Fallback: 10 Giphy + 5 videos = 15 total
+        giphy_gifs = gifs[:10]  # Take first 10 GIFs from Giphy
+        videos_final = dance_videos[:5]  # Take first 5 videos
+        
+        # Ensure we have exactly 10 Giphy and 5 videos for a total of 15
+        if len(giphy_gifs) < 10:
+            logger.warning(f"Only {len(giphy_gifs)} Giphy GIFs available, expected 10")
+        if len(videos_final) < 5:
+            logger.warning(f"Only {len(videos_final)} videos available, expected 5")
+        
+        # Interleave: pattern [Giphy GIF, video, Giphy GIF, video, ...]
+        interleaved: List[Dict[str, Any]] = []
+        max_len = max(len(giphy_gifs), len(videos_final))
+        for i in range(max_len):
+            # Add Giphy GIF first (odd positions: 1, 3, 5, 7, 9, 11, 13, 15)
+            if i < len(giphy_gifs):
+                interleaved.append(giphy_gifs[i])
+            # Add video second (even positions: 2, 4, 6, 8, 10, 12, 14)
+            if i < len(videos_final):
+                interleaved.append(videos_final[i])
+        
+        # If we still don't have 15 items, pad with more videos
+        video_padding_start = len(videos_final)
+        while len(interleaved) < 15 and video_padding_start < len(dance_videos):
+            interleaved.append(dance_videos[video_padding_start])
+            video_padding_start += 1
+        
+        logger.info(f"Interleaved media: {len(interleaved)} total items ({len(giphy_gifs)} Giphy GIFs + {len(videos_final)} videos) [Google API not available]")
     
-    # Interleave: create list with pattern [GIF, video, GIF, video, ...] (videos on even positions: 2, 4, 6, 8, 10)
-    interleaved: List[Dict[str, Any]] = []
-    max_len = max(len(gifs_final), len(videos_final))
-    for i in range(max_len):
-        # Add GIF first (odd positions: 1, 3, 5, 7, 9)
-        if i < len(gifs_final):
-            interleaved.append(gifs_final[i])
-        # Add video second (even positions: 2, 4, 6, 8, 10)
-        if i < len(videos_final):
-            interleaved.append(videos_final[i])
+    # Ensure we have exactly 15 items total - if not, log a warning
+    if len(interleaved) < 15:
+        logger.warning(f"Only {len(interleaved)} items interleaved (expected 15). This may happen if GIFs/videos are unavailable.")
     
     gifs = interleaved
-    logger.info(f"Interleaved media: {len(gifs)} total items ({len(gifs_final)} GIFs + {len(videos_final)} videos)")
     
     # Create enriched deck data - only copy basic fields to avoid recursive structures
     # Do NOT copy current_enriched, next_enriched, or other nested structures
@@ -653,8 +843,11 @@ def enrich_deck_data(deck_data: Dict[str, Any]) -> Dict[str, Any]:
         'gifs': gifs,
         'gif_pool': gif_pool,
         'giphy_query': query,
-        'giphy_query_parts': query_parts[:2]
+        'giphy_query_parts': query_parts[:2],
+        'google_query_parts': google_query_parts
     }
+    
+    logger.debug(f"Enriched deck includes google_query_parts: {'google_query_parts' in enriched_deck}, value: {enriched_deck.get('google_query_parts')}")
     
     # #region agent log
     _debug_log("djcap_processor.py:enrich_deck_data", "Enrichment complete", {"gifs_count": len(gifs), "gif_pool_size": len(gif_pool), "refined_keywords_count": len(refined_keywords)}, "I")
@@ -866,6 +1059,7 @@ def process_metadata_update(file_path: str):
             deck_data['gif_pool'] = current.get('gif_pool', [])
             deck_data['giphy_query'] = current.get('giphy_query')
             deck_data['giphy_query_parts'] = current.get('giphy_query_parts', [])
+            deck_data['google_query_parts'] = current.get('google_query_parts', [])
             logger.info(
                 f"After merge for {deck_name}: gifs={len(deck_data['gifs'])}, "
                 f"has_current_enriched={'current_enriched' in deck_data}"
