@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Calibrate Time ROIs</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+      .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+      .panel { width: 360px; }
+      .panel h2 { margin: 0 0 10px; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+      .hint { color: #555; font-size: 13px; line-height: 1.35; }
+      .btn { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+      .btn.primary { background: #111; color: #fff; border-color: #111; }
+      .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+      canvas { border: 1px solid #999; border-radius: 10px; max-width: 100%; height: auto; }
+      code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
+      .status { margin-top: 8px; font-size: 13px; }
+      .ok { color: #0a7; }
+      .err { color: #c22; }
+      .coords { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div style="flex: 1 1 760px;">
+        <canvas id="c"></canvas>
+        <div class="hint" style="margin-top: 8px;">
+          Click the 4 corners of the <b>time display</b> box in order:
+          <b>top-left → top-right → bottom-right → bottom-left</b>.
+          Select Deck 1 or Deck 2, then click Save.
+          Screenshot source: <code>/api/debug/last_capture.png</code>
+          &nbsp;•&nbsp;
+          <a href="/api/debug/last_capture.png" target="_blank" rel="noreferrer">Open screenshot in new tab</a>
+        </div>
+        <div class="hint" style="margin-top: 6px;">
+          If you see a blank page, make sure you opened this at
+          <code>http://localhost:8080/calibrate_time.html</code> (not <code>file://</code>).
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="card">
+          <h2>Time ROI Calibration</h2>
+
+          <div style="margin: 10px 0;">
+            <label><input type="radio" name="deck" value="deck1" checked /> Deck 1</label>
+            <label style="margin-left: 12px;"><input type="radio" name="deck" value="deck2" /> Deck 2</label>
+          </div>
+
+          <div class="hint">
+            Steps:
+            <ol>
+              <li>Make sure djcap is running (so <code>last_capture.png</code> is fresh)</li>
+              <li>Click 4 corners around the time (e.g. <code>01:23</code>)</li>
+              <li>Click <b>Save ROI</b></li>
+              <li>Switch to the other deck and repeat</li>
+            </ol>
+          </div>
+
+          <div style="display:flex; gap:8px; margin-top: 10px; flex-wrap: wrap;">
+            <button class="btn" id="reload">Reload Screenshot</button>
+            <button class="btn" id="reset">Reset Clicks</button>
+            <button class="btn primary" id="save" disabled>Save ROI</button>
+          </div>
+
+          <div class="status" id="status"></div>
+          <div class="coords" id="coords"></div>
+          <div class="hint" style="margin-top: 10px;">
+            Current saved ROIs: <code>/api/calibrate/region_coordinates</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      const saveBtn = document.getElementById('save');
+      const reloadBtn = document.getElementById('reload');
+      const resetBtn = document.getElementById('reset');
+      const statusEl = document.getElementById('status');
+      const coordsEl = document.getElementById('coords');
+
+      let img = new Image();
+      let clicks = []; // [{x,y}] in order TL,TR,BR,BL
+
+      function setStatus(text, kind) {
+        statusEl.className = 'status ' + (kind || '');
+        statusEl.textContent = text || '';
+      }
+      function getDeck() {
+        return document.querySelector('input[name="deck"]:checked').value;
+      }
+      function bboxFromClicks(points) {
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        const x1 = Math.min(...xs);
+        const y1 = Math.min(...ys);
+        const x2 = Math.max(...xs);
+        const y2 = Math.max(...ys);
+        return { x1, y1, x2, y2 };
+      }
+      function stepLabel(idx) {
+        return ['top-left', 'top-right', 'bottom-right', 'bottom-left'][idx] || 'corner';
+      }
+      function draw() {
+        if (!img.complete) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        if (clicks.length) {
+          const color = getDeck() === 'deck1' ? '#ff0033' : '#00cc44';
+          // Points
+          ctx.fillStyle = color;
+          for (let i = 0; i < clicks.length; i++) {
+            const p = clicks[i];
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            ctx.fillText(String(i + 1), p.x + 8, p.y - 8);
+          }
+          // Polygon lines
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(clicks[0].x, clicks[0].y);
+          for (let i = 1; i < clicks.length; i++) ctx.lineTo(clicks[i].x, clicks[i].y);
+          if (clicks.length === 4) ctx.closePath();
+          ctx.stroke();
+
+          // Bounding rect when complete
+          if (clicks.length === 4) {
+            const r = bboxFromClicks(clicks);
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 6]);
+            ctx.strokeRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(r.x1, Math.max(0, r.y1 - 22), 210, 22);
+            ctx.fillStyle = '#fff';
+            ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            ctx.fillText(getDeck() === 'deck1' ? 'Deck1 time ROI' : 'Deck2 time ROI', r.x1 + 6, Math.max(14, r.y1 - 6));
+          }
+        }
+      }
+
+      function canvasPoint(evt) {
+        const b = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / b.width;
+        const scaleY = canvas.height / b.height;
+        return {
+          x: Math.round((evt.clientX - b.left) * scaleX),
+          y: Math.round((evt.clientY - b.top) * scaleY),
+        };
+      }
+
+      function resetClicks() {
+        clicks = [];
+        saveBtn.disabled = true;
+        coordsEl.textContent = '';
+        setStatus(`Click ${stepLabel(0)} corner.`, '');
+        draw();
+      }
+
+      canvas.addEventListener('click', (e) => {
+        const p = canvasPoint(e);
+        if (clicks.length >= 4) {
+          // If user clicks again after 4 points, start over.
+          clicks = [];
+        }
+        clicks.push(p);
+        if (clicks.length < 4) {
+          saveBtn.disabled = true;
+          coordsEl.textContent = `${clicks.length}/4 corners set. Next: ${stepLabel(clicks.length)}.`;
+          setStatus(`Click ${stepLabel(clicks.length)} corner.`, '');
+        } else {
+          const r = bboxFromClicks(clicks);
+          const w = r.x2 - r.x1;
+          const h = r.y2 - r.y1;
+          if (w < 6 || h < 6) {
+            setStatus('ROI too small; click corners farther apart.', 'err');
+            saveBtn.disabled = true;
+          } else {
+            saveBtn.disabled = false;
+            coordsEl.textContent = `ROI = [${r.x1}, ${r.y1}, ${r.x2}, ${r.y2}] (px)`;
+            setStatus('Ready to save.', 'ok');
+          }
+        }
+        draw();
+      });
+
+      async function loadImage() {
+        setStatus('Loading screenshot…', '');
+        saveBtn.disabled = true;
+        clicks = [];
+        coordsEl.textContent = '';
+
+        const url = `/api/debug/last_capture.png?ts=${Date.now()}`;
+        img = new Image();
+        img.onload = () => {
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          draw();
+          setStatus(`Screenshot loaded (${img.naturalWidth}x${img.naturalHeight}). Click ${stepLabel(0)} corner.`, 'ok');
+        };
+        img.onerror = () => {
+          setStatus('Could not load screenshot. Start/restart djcap.py so it writes last_capture.png, then click Reload Screenshot.', 'err');
+        };
+        img.src = url;
+      }
+
+      reloadBtn.addEventListener('click', loadImage);
+      resetBtn.addEventListener('click', resetClicks);
+
+      saveBtn.addEventListener('click', async () => {
+        if (clicks.length !== 4) return;
+        const r = bboxFromClicks(clicks);
+        const deck = getDeck();
+        setStatus(`Saving ${deck} ROI…`, '');
+        saveBtn.disabled = true;
+        try {
+          const resp = await fetch('/api/calibrate/time_roi', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ deck, roi: [r.x1, r.y1, r.x2, r.y2] })
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            throw new Error(data.error || `HTTP ${resp.status}`);
+          }
+          setStatus(`Saved ${data.saved}: [${data.roi.join(', ')}]`, 'ok');
+        } catch (e) {
+          setStatus(`Save failed: ${e.message}`, 'err');
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+
+      // Initial load
+      loadImage();
+    </script>
+  </body>
+</html>
+
+

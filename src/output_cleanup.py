@@ -276,3 +276,4 @@ def cleanup_output_folder(output_folder: str, force_json_cleanup: bool = False) 
     
     return stats
 
+

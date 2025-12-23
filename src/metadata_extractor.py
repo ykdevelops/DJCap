@@ -7,6 +7,7 @@ import logging
 import json
 import os
 from typing import Dict, Any, Optional, Tuple, List
+import time
 import numpy as np
 from PIL import Image
 import cv2
@@ -42,6 +43,106 @@ try:
 except ImportError:
     OCRMAC_AVAILABLE = False
     logger.error("ocrmac not available. Please install it: pip install ocrmac")
+
+def _parse_timecode_to_seconds(s: str) -> Tuple[Optional[int], bool]:
+    """
+    Parse a timecode like '3:45' or '01:02:03' into seconds.
+    Returns (seconds, is_negative). seconds is None if not parseable/invalid.
+    """
+    if not s:
+        return (None, False)
+    raw = s.strip()
+    # Remove common noise around timecodes
+    raw = raw.replace(" ", "")
+    raw = raw.replace("O", "0").replace("o", "0")
+
+    # Handle leading minus (remaining time). We can't map remaining without track duration,
+    # but we can still use it directly as remaining time for end-alignment.
+    if raw.startswith("-"):
+        raw = raw[1:]
+        neg = True
+    else:
+        neg = False
+
+    if not re.match(r"^\d{1,2}:\d{2}(:\d{2})?$", raw):
+        return (None, neg)
+
+    parts = raw.split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return (None, neg)
+
+    if len(nums) == 2:
+        mm, ss = nums
+        if ss < 0 or ss >= 60 or mm < 0 or mm > 999:
+            return (None, neg)
+        return (mm * 60 + ss, neg)
+    if len(nums) == 3:
+        hh, mm, ss = nums
+        if ss < 0 or ss >= 60 or mm < 0 or mm >= 60 or hh < 0 or hh > 99:
+            return (None, neg)
+        return (hh * 3600 + mm * 60 + ss, neg)
+    return (None, neg)
+
+
+def _extract_timecode_seconds_from_region(region_image: Image.Image, region_name: str) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Use OCR detail output to find the best mm:ss-like timecode within a region.
+    Returns (seconds, raw_string).
+    """
+    if not OCRMAC_AVAILABLE:
+        return (None, None)
+
+    try:
+        # detail=True gives us per-token results (often with boxes/confidence).
+        results = text_from_image(region_image, recognition_level="accurate", detail=True)
+    except Exception as e:
+        logger.debug(f"ocrmac timecode detail failed for {region_name}: {e}")
+        return (None, None)
+
+    # candidates: (seconds, raw, is_negative)
+    candidates: List[Tuple[int, str, bool]] = []
+    for item in results or []:
+        text = None
+        # ocrmac detail shapes can vary; be defensive.
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, (list, tuple)) and len(item) >= 1:
+            if isinstance(item[0], str):
+                text = item[0]
+        elif isinstance(item, dict):
+            # Some OCR libs return dicts; try common keys.
+            for k in ("text", "string", "value"):
+                if isinstance(item.get(k), str):
+                    text = item.get(k)
+                    break
+
+        if not text:
+            continue
+
+        # Find any timecode-looking substrings inside the token
+        # (e.g. "03:21", "0:45", "-1:02")
+        for m in re.finditer(r"-?\b\d{1,2}:\d{2}(?::\d{2})?\b", text):
+            raw = m.group(0)
+            secs, neg = _parse_timecode_to_seconds(raw)
+            if secs is None:
+                continue
+            # Prefer small-ish values (typical within-track position), but don't hard-cap.
+            candidates.append((secs, raw, neg))
+
+    if not candidates:
+        return (None, None)
+
+    # Heuristic: pick the largest timecode (usually current position beats preview/cue markers)
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    best_secs, best_raw, best_neg = candidates[0]
+    logger.debug(
+        f"Timecode candidate for {region_name}: {best_raw} -> {best_secs}s "
+        f"neg={best_neg} (picked from {len(candidates)})"
+    )
+    # Encode neg in raw string only; caller can decide which field to populate.
+    return (best_secs, ("-" + best_raw if best_neg and not best_raw.startswith("-") else best_raw))
 
 
 def _extract_text_with_ocrmac(region_image: Image.Image, region_name: str) -> Optional[str]:
@@ -546,6 +647,74 @@ def extract_metadata(screenshot: Image.Image) -> Dict[str, Any]:
     # Convert to Python bool to ensure JSON serialization works
     deck1_metadata["active"] = bool(deck1_is_active)
     deck2_metadata["active"] = bool(deck2_is_active)
+
+    # Screenshot-based timing: attempt to OCR a mm:ss timecode near each deck's play controls.
+    # This gives a much better sync reference than track_started_at guesses.
+    try:
+        now_s = time.time()
+        if OCRMAC_AVAILABLE:
+            # Prefer user-calibrated ROIs if present in data/region_coordinates.json.
+            deck1_time_roi = coords.get("deck1_time_roi") if coords else None
+            deck2_time_roi = coords.get("deck2_time_roi") if coords else None
+
+            def _clamp_roi(roi: List[int]) -> Optional[Tuple[int, int, int, int]]:
+                if not roi or not isinstance(roi, list) or len(roi) != 4:
+                    return None
+                try:
+                    x1, y1, x2, y2 = [int(v) for v in roi]
+                except Exception:
+                    return None
+                x1 = max(0, min(width, x1))
+                x2 = max(0, min(width, x2))
+                y1 = max(0, min(height, y1))
+                y2 = max(0, min(height, y2))
+                if x2 <= x1 or y2 <= y1:
+                    return None
+                return (x1, y1, x2, y2)
+
+            def _heuristic_roi_for_deck(play_box, is_left: bool) -> Tuple[int, int, int, int]:
+                if play_box and isinstance(play_box, list) and len(play_box) == 4:
+                    _, y1, _, y2 = [int(v) for v in play_box]
+                    y_start = max(0, y1 - 140)
+                    y_end = min(height, y2 + 140)
+                else:
+                    y_start = int(height * 0.28)
+                    y_end = int(height * 0.55)
+
+                if is_left:
+                    x_start, x_end = 0, width // 2
+                else:
+                    x_start, x_end = width // 2, width
+                return (x_start, y_start, x_end, y_end)
+
+            deck1_box = coords.get("deck1_play_button") if coords else None
+            deck2_box = coords.get("deck2_play_button") if coords else None
+
+            roi1_box = _clamp_roi(deck1_time_roi) or _heuristic_roi_for_deck(deck1_box, True)
+            x1, y1, x2, y2 = roi1_box
+            roi1 = Image.fromarray(img_array[y1:y2, x1:x2])
+            s1, raw1 = _extract_timecode_seconds_from_region(roi1, "deck1_time_roi")
+            if s1 is not None:
+                deck1_metadata["position_updated_at"] = now_s
+                deck1_metadata["playback_time_raw"] = raw1
+                if isinstance(raw1, str) and raw1.strip().startswith("-"):
+                    deck1_metadata["playback_remaining_s"] = s1
+                else:
+                    deck1_metadata["playback_position_s"] = s1
+
+            roi2_box = _clamp_roi(deck2_time_roi) or _heuristic_roi_for_deck(deck2_box, False)
+            x1, y1, x2, y2 = roi2_box
+            roi2 = Image.fromarray(img_array[y1:y2, x1:x2])
+            s2, raw2 = _extract_timecode_seconds_from_region(roi2, "deck2_time_roi")
+            if s2 is not None:
+                deck2_metadata["position_updated_at"] = now_s
+                deck2_metadata["playback_time_raw"] = raw2
+                if isinstance(raw2, str) and raw2.strip().startswith("-"):
+                    deck2_metadata["playback_remaining_s"] = s2
+                else:
+                    deck2_metadata["playback_position_s"] = s2
+    except Exception as e:
+        logger.debug(f"Playback time OCR failed: {e}")
     
     logger.info(f"Extracted metadata - Deck1: Title={deck1_metadata.get('title')}, Artist={deck1_metadata.get('artist')}, "
                 f"BPM={deck1_metadata.get('bpm')}, Key={deck1_metadata.get('key')}, Active={deck1_metadata.get('active')} | "

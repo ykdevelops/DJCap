@@ -160,6 +160,41 @@
             transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out, filter 0.15s ease-in-out, clip-path 0.15s ease-in-out;
         }
         
+        .gif-base-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        
+        .gif-overlay-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10; /* Higher z-index to ensure it's above music video */
+        }
+        
+        .overlay-visible {
+            opacity: 1 !important;
+            visibility: visible !important;
+            display: block !important;
+            z-index: 10 !important; /* Ensure it stays on top */
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+        
+        .overlay-hidden {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            display: block !important; /* Keep in DOM for smooth transition */
+            pointer-events: none;
+            z-index: 10 !important; /* Keep z-index even when hidden */
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+        
         /* Transition types - each video gets a unique one */
         .gif-image.fade-out { opacity: 0; }
         .gif-image.fade-in { opacity: 1; }
@@ -254,6 +289,19 @@
         .gif-index-btn.active:hover {
             background: rgba(102, 126, 234, 0.95);
         }
+        .gif-index-btn.ok {
+            background: rgba(34, 197, 94, 0.18);
+            color: #166534;
+        }
+        .gif-index-btn.fail {
+            background: rgba(239, 68, 68, 0.16);
+            color: #991b1b;
+        }
+        .gif-index-btn.active.ok,
+        .gif-index-btn.active.fail {
+            /* active state wins background, but keep readable */
+            color: #fff;
+        }
 
         .empty-state {
             text-align: center;
@@ -264,6 +312,95 @@
         .empty-state-icon {
             font-size: 4em;
             margin-bottom: 20px;
+        }
+
+        /* Music Video Indicator Styles */
+        .music-video-status {
+            padding: 20px;
+            text-align: center;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .music-video-status.searching {
+            background: linear-gradient(135deg, #ffa726 0%, #fb8c00 100%);
+            color: white;
+            animation: pulse 2s infinite;
+        }
+
+        .music-video-status.found {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+            color: white;
+        }
+
+        .music-video-status.displaying {
+            background: #f5f5f5;
+        }
+
+        .music-video-status.none {
+            background: #e0e0e0;
+            color: #999;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .status-icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+
+        .status-text {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .status-details {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .music-video-player {
+            width: 100%;
+            max-height: 360px;
+            border-radius: 12px;
+            background: #000;
+            margin-top: 12px;
+        }
+
+        .music-video-clip {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease;
+        }
+
+        .music-video-clip:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+        }
+
+        .music-video-clip-player {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            cursor: pointer;
+            background: #000;
+        }
+
+        .clip-info {
+            padding: 10px;
+            font-size: 0.85em;
+            color: #666;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .timestamp {
@@ -377,25 +514,57 @@
                 <!-- GIFs Card (swapped position with GIF Search Preview) -->
                 <div class="card">
                     <h2>🎬 Visuals</h2>
-                    <div v-if="gifCount > 0" class="gifs-section">
+                    <div v-if="prefetchStatusText" style="margin: 6px 0 10px; font-size: 13px; color: #aab4c3;">
+                        {{ prefetchStatusText }}
+                    </div>
+                    <div v-if="gifCount > 0 || musicVideoUrl" class="gifs-section">
                         <div class="gif-display-container">
-                            <video v-if="currentGifVideoUrl"
-                                   :src="currentGifVideoUrl"
-                                   :poster="currentGifUrl"
+                            <!-- Music video as base layer (always playing) -->
+                            <video v-if="musicVideoUrl"
+                                   ref="mainMusicVideoPlayer"
+                                   :src="musicVideoUrl"
                                    playsinline
                                    muted
                                    preload="auto"
-                                   class="gif-image"
-                                   @loadedmetadata="onVideoLoaded"
-                                   @ended="onVideoEnded"
+                                   class="gif-image gif-base-layer"
+                                   @loadedmetadata="onMainMusicVideoLoaded"
+                                   @timeupdate="onMainMusicVideoTimeUpdate"
                                    autoplay></video>
-                            <img v-else
-                                 :src="currentGifUrl" 
-                                 :alt="currentGifTitle"
-                                 class="gif-image"
-                                 @error="handleImageError"
-                                 @load="onGifLoad">
-                            <div class="gif-counter" v-if="gifCount > 1">
+                            <!-- Dance video overlay (alternates every second) -->
+                            <video v-if="musicVideoUrl && currentDanceOverlayUrl"
+                                   :src="currentDanceOverlayUrl"
+                                   playsinline
+                                   muted
+                                   preload="auto"
+                                   class="gif-image gif-overlay-layer"
+                                   :class="{ 'overlay-visible': showDanceOverlay, 'overlay-hidden': !showDanceOverlay }"
+                                   @loadedmetadata="onDanceOverlayLoaded"
+                                   @ended="onDanceOverlayEnded"
+                                   autoplay></video>
+                            <!-- Fallback for when no music video -->
+                            <template v-else-if="!musicVideoUrl">
+                                <video v-if="currentGifVideoUrl"
+                                       :src="currentGifVideoUrl"
+                                       :poster="currentGifUrl"
+                                       playsinline
+                                       muted
+                                       preload="auto"
+                                       class="gif-image"
+                                       @loadedmetadata="onVideoLoaded"
+                                       @error="onClipVideoError"
+                                       @ended="onVideoEnded"
+                                       autoplay></video>
+                                <img v-else
+                                     :src="currentGifUrl" 
+                                     :alt="currentGifTitle"
+                                     class="gif-image"
+                                     @error="handleImageError"
+                                     @load="onGifLoad">
+                            </template>
+                            <div class="gif-counter" v-if="musicVideoUrl">
+                                MV{{ showDanceOverlay ? ' + Dance' : '' }}
+                            </div>
+                            <div class="gif-counter" v-else-if="gifCount > 1">
                                 {{ currentGifIndex + 1 }} / {{ gifCount }}
                             </div>
                         </div>
@@ -404,7 +573,7 @@
                                 v-for="n in gifCount"
                                 :key="n"
                                 class="gif-index-btn"
-                                :class="{ active: (n - 1) === currentGifIndex }"
+                                :class="{ active: (n - 1) === currentGifIndex, ok: gifSlotStatus[n-1] === 'ok', fail: gifSlotStatus[n-1] === 'fail' }"
                                 @click="removeGifAt(n - 1)"
                                 :title="`Remove GIF #${n} from rotation`"
                             >{{ n }}</button>
@@ -413,6 +582,43 @@
                     <div v-else class="empty-state">
                         <div class="empty-state-icon">🎭</div>
                         <p>No GIFs available yet. Waiting for track data...</p>
+                    </div>
+                </div>
+
+                <!-- Music Video Indicator -->
+                <div class="card" style="margin-top: 20px;">
+                    <h2>🎵 Music Video</h2>
+                    <div v-if="musicVideoStatus === 'searching'" class="music-video-status searching">
+                        <div class="status-icon">🔍</div>
+                        <div class="status-text">Searching for music video...</div>
+                        <div class="status-details">{{ activeDeckData?.artist }} - {{ activeDeckData?.title }}</div>
+                    </div>
+                    <div v-else-if="musicVideoStatus === 'found'" class="music-video-status found">
+                        <div class="status-icon">✅</div>
+                        <div class="status-text">Music video found!</div>
+                        <div class="status-details">Ready to play</div>
+                    </div>
+                    <div v-else-if="musicVideoStatus === 'error'" class="music-video-status none">
+                        <div class="status-icon">⚠️</div>
+                        <div class="status-text">Music video download failed</div>
+                        <div class="status-details">Check backend logs for yt-dlp/ffmpeg errors</div>
+                    </div>
+                    <div v-else-if="musicVideoStatus === 'displaying'" class="music-video-status displaying">
+                        <div class="status-icon">🎬</div>
+                        <div class="status-text">Music Video (synced)</div>
+                        <video
+                            ref="musicVideoPlayer"
+                            class="music-video-player"
+                            :src="musicVideoUrl"
+                            playsinline
+                            muted
+                            preload="metadata"
+                            @loadedmetadata="onMusicVideoLoaded"
+                            @timeupdate="onMusicVideoTimeUpdate"
+                        ></video>
+                    </div>
+                    <div v-else class="music-video-status none">
+                        <div class="status-text">No music video available</div>
                     </div>
                 </div>
 
@@ -491,6 +697,7 @@
                     isConnected: false,
                     pollInterval: null,
                     gifCycleInterval: null,
+                    musicVideoSyncInterval: null,
                     currentGifIndex: 0,
                     lastTrackId: null,
                     gifs: [],
@@ -502,35 +709,80 @@
                     activeVideoRef: null,
                     gifTimeoutId: null,
                     videoTimeoutId: null,
-                    playedVideoIds: [] // Track videos that have been played to avoid repeats
+                    mvTimeoutId: null,
+                    lastClipDurationMs: null,
+                    mainVisualMode: 'clip', // 'clip' | 'mv'
+                    musicVideoInterleaveMultiplier: 2,
+                    danceVideosOverlay: [], // Dance videos for overlay
+                    currentDanceOverlayIndex: 0,
+                    showDanceOverlay: false, // Toggle every second
+                    danceOverlayInterval: null,
+                    prefetchInProgress: false,
+                    prefetchedTrackId: null,
+                    cachedUrlMap: {},
+                    _preloadVideoEls: [],
+                    prefetchTotal: 0,
+                    prefetchCached: 0,
+                    prefetchSkipped: 0,
+                    prefetchFailed: 0,
+                    prefetchLastMessageAt: 0,
+                    playedVideoIds: [], // Track videos that have been played to avoid repeats
+                    gifSlotStatus: [], // 'pending' | 'ok' | 'fail' per slot
+                    lastETag: null, // For conditional requests
+                    _nextVideoPreload: [] // Store preloaded next videos
                 };
             },
             computed: {
                 activeDeckData() {
-                    // Get data from the active deck (or first active deck if both are active)
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:509',message:'activeDeckData computed entry',data:{hasEnrichedData:!!this.enrichedData,active_deck:this.enrichedData?.active_deck,deck1_active:this.enrichedData?.deck1?.active,deck2_active:this.enrichedData?.deck2?.active,deck1_hasGifs:Array.isArray(this.enrichedData?.deck1?.gifs)?this.enrichedData.deck1.gifs.length:0,deck2_hasGifs:Array.isArray(this.enrichedData?.deck2?.gifs)?this.enrichedData.deck2.gifs.length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+                    // #endregion
+                    // Get data from the active deck - prioritize active_deck field when set
                     if (!this.enrichedData) return null;
                     
                     let deckData = null;
+                    const activeDeckField = this.enrichedData.active_deck;
                     
-                    // Check deck1 first
-                    if (this.getDeckActive('deck1') && this.enrichedData.deck1) {
-                        deckData = this.enrichedData.deck1;
+                    // PRIORITY 1: Use active_deck field if explicitly set (fixes data inconsistency)
+                    if (activeDeckField && this.enrichedData[activeDeckField]) {
+                        deckData = this.enrichedData[activeDeckField];
+                        // Ensure deck property is set for consistency
+                        if (!deckData.deck) {
+                            deckData = { ...deckData, deck: activeDeckField };
+                        }
                     }
-                    // Then check deck2
-                    else if (this.getDeckActive('deck2') && this.enrichedData.deck2) {
-                        deckData = this.enrichedData.deck2;
-                    }
-                    // Fallback to active_deck field
+                    // PRIORITY 2: Fallback to checking individual deck active flags
                     else {
-                        const activeDeck = this.enrichedData.active_deck;
-                        if (activeDeck && this.enrichedData[activeDeck]) {
-                            deckData = this.enrichedData[activeDeck];
+                        const deck1Active = this.getDeckActive('deck1');
+                        const deck2Active = this.getDeckActive('deck2');
+                        
+                        // Check deck1 first
+                        if (deck1Active && this.enrichedData.deck1) {
+                            deckData = this.enrichedData.deck1;
+                            if (!deckData.deck) {
+                                deckData = { ...deckData, deck: 'deck1' };
+                            }
+                        }
+                        // Then check deck2
+                        else if (deck2Active && this.enrichedData.deck2) {
+                            deckData = this.enrichedData.deck2;
+                            if (!deckData.deck) {
+                                deckData = { ...deckData, deck: 'deck2' };
+                            }
                         }
                     }
                     
-                    if (!deckData) return null;
+                    if (!deckData) {
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:545',message:'activeDeckData returning null',data:{activeDeckField,hasDeck1:!!this.enrichedData.deck1,hasDeck2:!!this.enrichedData.deck2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+                        // #endregion
+                        return null;
+                    }
                     
-                    // Return the deck data as-is - it may have current_enriched nested inside
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:548',message:'activeDeckData computed exit',data:{returnedDeck:deckData.deck,returnedArtist:deckData.artist,gifsCount:Array.isArray(deckData.gifs)?deckData.gifs.length:0,deckActive:deckData.active},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+                    // #endregion
+                    // Return the deck data with deck property set
                     return deckData;
                 },
                 gifCount() {
@@ -543,17 +795,101 @@
                 currentGifUrl() {
                     if (!this.currentGif) return '';
                     // Giphy API returns url directly, but also check for images.downsized.url for compatibility
-                    return this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
+                    let url = this.currentGif.url || this.currentGif.images?.downsized?.url || this.currentGif.images?.fixed_height?.url || '';
+                    
+                    // If it's an external URL (not localhost, not relative), proxy it through backend
+                    if (url && !url.startsWith('/') && !url.startsWith('http://localhost') && !url.startsWith('http://127.0.0.1')) {
+                        try {
+                            // Encode URL as base64 for the proxy endpoint (more reliable than URL encoding)
+                            // Use a helper function that handles Unicode properly
+                            const base64Url = btoa(unescape(encodeURIComponent(url)));
+                            url = `/api/proxy_gif/${base64Url}`;
+                        } catch (e) {
+                            // If encoding fails, use URL encoding as fallback
+                            url = `/api/proxy_gif/${encodeURIComponent(url)}`;
+                        }
+                    }
+                    
+                    return url;
                 },
                 currentGifVideoUrl() {
                     if (!this.currentGif) return '';
-                    const url = (this.currentGif.url || '').toLowerCase();
+                    const originalUrl = this.currentGif.url || '';
+                    const url = originalUrl.toLowerCase();
                     const mime = (this.currentGif.mime || '').toLowerCase();
-                    if (mime.startsWith('video/') || url.endsWith('.mp4')) return this.currentGif.url;
+                    
+                    if (mime.startsWith('video/') || url.endsWith('.mp4')) {
+                        // If it's an external URL (not localhost, not relative), proxy it through backend
+                        if (originalUrl && !originalUrl.startsWith('/') && !originalUrl.startsWith('http://localhost') && !originalUrl.startsWith('http://127.0.0.1')) {
+                            try {
+                                // Encode URL as base64 for the proxy endpoint
+                                const base64Url = btoa(unescape(encodeURIComponent(originalUrl)));
+                                return `/api/proxy_gif/${base64Url}`;
+                            } catch (e) {
+                                // If encoding fails, use URL encoding as fallback
+                                return `/api/proxy_gif/${encodeURIComponent(originalUrl)}`;
+                            }
+                        }
+                        return originalUrl;
+                    }
                     return '';
                 },
                 currentGifTitle() {
                     return this.currentGif?.title || 'GIF';
+                },
+                musicVideo() {
+                    return this.activeDeckData?.music_video || null;
+                },
+                musicVideoUrl() {
+                    return this.musicVideo?.url || '';
+                },
+                showMainMusicVideo() {
+                    return this.mainVisualMode === 'mv' && !!this.musicVideoUrl;
+                },
+                currentDanceOverlayUrl() {
+                    if (!this.danceVideosOverlay || this.danceVideosOverlay.length === 0) {
+                        return null;
+                    }
+                    const index = this.currentDanceOverlayIndex % this.danceVideosOverlay.length;
+                    const video = this.danceVideosOverlay[index];
+                    const url = video?.url || null;
+                    if (url) {
+                        console.log('Current dance overlay URL:', url, 'index:', index);
+                    }
+                    return url;
+                },
+                musicVideoStatus() {
+                    if (!this.activeDeckData) return 'none';
+                    const backendStatus = this.activeDeckData.music_video_status;
+                    // If we have a video URL, display it
+                    if (this.musicVideoUrl) return 'displaying';
+
+                    // Prefer backend-reported status when available
+                    if (backendStatus === 'ready') return 'found';
+                    if (backendStatus === 'empty') return 'none';
+                    if (backendStatus === 'error') return 'error';
+
+                    // Default behavior: if we have a track, we are searching (backend may still be inflight)
+                    if (this.activeDeckData.title && this.activeDeckData.artist) return 'searching';
+
+                    return 'none';
+                }
+                ,
+                prefetchStatusText() {
+                    // Show a short status line during/shortly after prefetch.
+                    const now = Date.now();
+                    const ageMs = now - Number(this.prefetchLastMessageAt || 0);
+                    if (!this.prefetchInProgress && (!this.prefetchLastMessageAt || ageMs > 6000)) return '';
+
+                    const t = Number(this.prefetchTotal || 0);
+                    const c = Number(this.prefetchCached || 0);
+                    const s = Number(this.prefetchSkipped || 0);
+                    const f = Number(this.prefetchFailed || 0);
+
+                    if (this.prefetchInProgress) {
+                        return `Prefetching media… total ${t}`;
+                    }
+                    return `Prefetch done: cached ${c}, skipped ${s}, failed ${f} (total ${t})`;
                 }
             },
             mounted() {
@@ -564,6 +900,11 @@
                 }, 2000);
                 // Start GIF cycling
                 this.startGifCycle();
+
+                // Keep music video synced to audio time (best-effort)
+                this.musicVideoSyncInterval = setInterval(() => {
+                    this.syncAllMusicVideos(false);
+                }, 500);
             },
             watch: {
                 // Update video playback rate when BPM changes
@@ -575,13 +916,86 @@
                 // Update video playback rate when video changes
                 currentGifVideoUrl(newUrl) {
                     if (newUrl) {
-                        // Wait for video to load, then update rate
+                        // Playback rate is applied in onVideoLoaded (for the clip video ref).
+                        // Avoid querySelector('video') since we also render music video videos.
+                    }
+                },
+                // Preload next video when index changes
+                currentGifIndex(newIndex, oldIndex) {
+                    if (newIndex !== oldIndex && this.gifCount > 0) {
+                        this.preloadNextVideo(newIndex);
+                    }
+                },
+                // Watch for overlay visibility changes
+                showDanceOverlay(newVal) {
+                    if (newVal) {
+                        // When overlay becomes visible, wait for video to load then play
                         this.$nextTick(() => {
-                            const video = document.querySelector('video');
-                            if (video && video.readyState >= 2) {
-                                this.updateVideoPlaybackRate();
+                            const overlayVideo = document.querySelector('.gif-overlay-layer');
+                            if (overlayVideo && overlayVideo instanceof HTMLVideoElement) {
+                                overlayVideo.style.opacity = '1';
+                                overlayVideo.style.visibility = 'visible';
+                                overlayVideo.style.display = 'block';
+                                
+                                // Wait for video to be ready before playing
+                                const tryPlay = () => {
+                                    if (overlayVideo.readyState >= 2) { // HAVE_CURRENT_DATA or higher
+                                        overlayVideo.play().catch(err => {
+                                            // AbortError is expected when source changes, ignore it
+                                            if (err.name !== 'AbortError') {
+                                                console.error('Error playing overlay on show:', err);
+                                            }
+                                        });
+                                    } else {
+                                        // Wait a bit and try again
+                                        setTimeout(tryPlay, 50);
+                                    }
+                                };
+                                
+                                // If already loaded, play immediately
+                                if (overlayVideo.readyState >= 2) {
+                                    tryPlay();
+                                } else {
+                                    // Wait for loadedmetadata event
+                                    overlayVideo.addEventListener('loadedmetadata', tryPlay, { once: true });
+                                }
                             }
                         });
+                    }
+                },
+                // Watch for URL changes to play new video when it switches
+                currentDanceOverlayUrl(newUrl, oldUrl) {
+                    if (newUrl && newUrl !== oldUrl && this.showDanceOverlay) {
+                        // URL changed while overlay is visible - play the new video
+                        this.$nextTick(() => {
+                            const overlayVideo = document.querySelector('.gif-overlay-layer');
+                            if (overlayVideo && overlayVideo instanceof HTMLVideoElement) {
+                                overlayVideo.currentTime = 0;
+                                const tryPlay = () => {
+                                    if (overlayVideo.readyState >= 2) {
+                                        overlayVideo.play().catch(err => {
+                                            if (err.name !== 'AbortError') {
+                                                console.error('Error playing overlay on URL change:', err);
+                                            }
+                                        });
+                                    } else {
+                                        setTimeout(tryPlay, 50);
+                                    }
+                                };
+                                tryPlay();
+                            }
+                        });
+                    }
+                },
+                // Watch for music video URL to start overlay cycle
+                musicVideoUrl(newUrl, oldUrl) {
+                    if (newUrl && newUrl !== oldUrl) {
+                        // Music video just became available - start overlay cycle if we have dance videos
+                        if (this.danceVideosOverlay && this.danceVideosOverlay.length > 0 && !this.danceOverlayInterval) {
+                            this.$nextTick(() => {
+                                this.startDanceOverlayCycle();
+                            });
+                        }
                     }
                 }
             },
@@ -592,11 +1006,17 @@
                 if (this.gifCycleInterval) {
                     clearInterval(this.gifCycleInterval);
                 }
+                if (this.musicVideoSyncInterval) {
+                    clearInterval(this.musicVideoSyncInterval);
+                }
                 if (this.gifTimeoutId) {
                     clearTimeout(this.gifTimeoutId);
                 }
                 if (this.videoTimeoutId) {
                     clearTimeout(this.videoTimeoutId);
+                }
+                if (this.mvTimeoutId) {
+                    clearTimeout(this.mvTimeoutId);
                 }
             },
             methods: {
@@ -609,9 +1029,15 @@
                     console.log('currentGifUrl:', this.currentGifUrl);
                 },
                 async fetchGifsForActiveDeck() {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:625',message:'fetchGifsForActiveDeck entry',data:{hasActiveDeckData:!!this.activeDeckData,activeDeckData_title:this.activeDeckData?.title,activeDeckData_artist:this.activeDeckData?.artist,activeDeckData_gifsCount:Array.isArray(this.activeDeckData?.gifs)?this.activeDeckData.gifs.length:0,activeDeckData_active:this.activeDeckData?.active},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+                    // #endregion
                     // Uses GIFs embedded in /api/enriched (no extra API calls / loops).
                     const deck = this.activeDeckData;
                     if (!deck || !deck.title || !deck.artist) {
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:628',message:'fetchGifsForActiveDeck no valid deck - clearing GIFs',data:{hasDeck:!!deck,hasTitle:!!deck?.title,hasArtist:!!deck?.artist,active_deck:this.enrichedData?.active_deck,deck1_active:this.getDeckActive('deck1'),deck2_active:this.getDeckActive('deck2')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+                        // #endregion
                         this.gifs = [];
                         this.gifPool = [];
                         this.bannedGifIds = [];
@@ -633,7 +1059,11 @@
                     // Always update GIFs from the API, even if track hasn't changed
                     // This ensures we get the latest data including all 15 items
                     const newGifs = Array.isArray(deck.gifs) ? deck.gifs : [];
-                    
+
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:649',message:'fetchGifsForActiveDeck checking GIFs',data:{newGifsCount:newGifs.length,currentGifsCount:this.gifs.length,lastGifTrackId:this.lastGifTrackId,trackId,deckActive:deck.active},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+                    // #endregion
+
                     // Only skip if it's the exact same track AND we already have the correct number of items
                     if (this.lastGifTrackId === trackId && this.gifs && this.gifs.length === newGifs.length && newGifs.length > 0) {
                         // Already have GIFs for this track with correct count
@@ -641,6 +1071,37 @@
                     }
 
                     this.gifs = newGifs;
+                    // Initialize slot status (pending until load/error)
+                    this.gifSlotStatus = Array.isArray(this.gifs) ? this.gifs.map(() => 'pending') : [];
+                    
+                    // Load dance videos for overlay
+                    this.danceVideosOverlay = Array.isArray(deck.dance_videos_overlay) ? deck.dance_videos_overlay : [];
+                    console.log('Loaded dance videos for overlay:', this.danceVideosOverlay.length, 'videos');
+                    console.log('Dance videos sample:', this.danceVideosOverlay.slice(0, 3).map(v => ({ url: v?.url, id: v?.id })));
+                    console.log('Music video URL:', this.musicVideoUrl);
+                    if (this.danceVideosOverlay.length > 0) {
+                        this.currentDanceOverlayIndex = 0;
+                        // Start cycle when music video is available
+                        if (this.musicVideoUrl) {
+                            this.$nextTick(() => {
+                                this.startDanceOverlayCycle();
+                            });
+                        }
+                    } else {
+                        console.warn('No dance videos found in deck.dance_videos_overlay:', deck.dance_videos_overlay);
+                        this.stopDanceOverlayCycle();
+                    }
+                    
+                    // If no gifs but music video exists, show music video
+                    if (this.gifCount === 0 && this.musicVideoUrl) {
+                        this.mainVisualMode = 'mv';
+                    } else if (this.gifCount > 0) {
+                        this.mainVisualMode = 'clip';
+                    }
+                    
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:657',message:'fetchGifsForActiveDeck after setting gifs',data:{gifsCount:this.gifs.length,willShowEmptyState:this.gifs.length===0,giphyCount:(this.gifs||[]).filter(g=>String(g?.url||'').includes('giphy')).length,googleCount:(this.gifs||[]).filter(g=>String(g?.source||'')==='google').length,danceCount:(this.gifs||[]).filter(g=>String(g?.source||'')==='dance_mp4_bank').length,sample:(this.gifs||[]).slice(0,3).map(g=>({source:g?.source||'',mime:g?.mime||'',urlHead:String(g?.url||'').slice(0,60)}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'GIF-H3'})}).catch(()=>{});
+                    // #endregion
                     this.gifPool = Array.isArray(deck.gif_pool) && deck.gif_pool.length > 0 ? deck.gif_pool : (Array.isArray(deck.gifs) ? deck.gifs : []);
                     this.bannedGifIds = [];
 
@@ -670,6 +1131,9 @@
                     }
                     this.lastGifTrackId = trackId;
 
+                    // Prefetch all media for this track (download to disk + cache) before sequencing.
+                    await this.prefetchTrackMedia(trackId, deck);
+
                     // Always restart the GIF cycle for the latest track data
                     this.startGifCycle();
                 },
@@ -679,6 +1143,336 @@
                     return String(gif.id || gif.url || '');
                 },
 
+                markGifSlot(index, status, reason) {
+                    if (!Array.isArray(this.gifSlotStatus) || this.gifSlotStatus.length === 0) return;
+                    if (typeof index !== 'number' || index < 0) return;
+                    const i = index % this.gifSlotStatus.length;
+                    this.gifSlotStatus[i] = status;
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:markGifSlot',message:'slot status update',data:{trackId:this.lastGifTrackId,index:i,status,reason,gifId:this.getGifId(this.gifs?.[i])},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'SLOT-H3'})}).catch(()=>{});
+                    // #endregion
+                },
+
+                pickDanceFallback() {
+                    const fromList = (list) => {
+                        const vids = (list || []).filter(g => String(g?.source || '') === 'dance_mp4_bank' || String(g?.url || '').startsWith('/api/dance_video/'));
+                        if (vids.length === 0) return null;
+                        return vids[Math.floor(Math.random() * vids.length)];
+                    };
+                    return fromList(this.gifPool) || fromList(this.gifs) || null;
+                },
+
+                replaceCurrentWithDanceFallback(reason) {
+                    if (!Array.isArray(this.gifs) || this.gifs.length === 0) return;
+                    const fallback = this.pickDanceFallback();
+                    if (!fallback) {
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:replaceCurrentWithDanceFallback',message:'no dance fallback available',data:{trackId:this.lastGifTrackId,reason,currentGifId:this.getGifId(this.currentGif)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'SLOT-H3'})}).catch(()=>{});
+                        // #endregion
+                        this.advanceGif();
+                        return;
+                    }
+                    const idx = this.currentGifIndex % this.gifs.length;
+                    const oldId = this.getGifId(this.gifs[idx]);
+                    this.gifs.splice(idx, 1, fallback);
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:replaceCurrentWithDanceFallback',message:'replaced failed media with dance fallback',data:{trackId:this.lastGifTrackId,reason,idx,oldId,newId:this.getGifId(fallback),newUrl:(fallback?.url||'')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'SLOT-H3'})}).catch(()=>{});
+                    // #endregion
+                    this.$nextTick(() => this.advanceGif());
+                },
+
+                async prefetchTrackMedia(trackId, deck) {
+                    try {
+                        if (!trackId) return;
+                        // Only do work on track change
+                        if (this.prefetchedTrackId === trackId) return;
+
+                        // Build list of items to prefetch: prefer full pool (so sequencing never needs network)
+                        const pool = Array.isArray(deck?.gif_pool) && deck.gif_pool.length > 0
+                            ? deck.gif_pool
+                            : (Array.isArray(deck?.gifs) ? deck.gifs : []);
+                        const items = (pool || []).map(it => ({
+                            url: it?.url || '',
+                            mime: it?.mime || '',
+                            id: it?.id || ''
+                        })).filter(it => !!it.url);
+
+                        if (items.length === 0) {
+                            this.prefetchedTrackId = trackId;
+                            this.cachedUrlMap = {};
+                            this.prefetchTotal = 0;
+                            this.prefetchCached = 0;
+                            this.prefetchSkipped = 0;
+                            this.prefetchFailed = 0;
+                            return;
+                        }
+
+                        this.prefetchInProgress = true;
+                        this.prefetchLastMessageAt = Date.now();
+                        this.prefetchTotal = items.length;
+                        this.prefetchCached = 0;
+                        this.prefetchSkipped = 0;
+                        this.prefetchFailed = 0;
+
+                        const resp = await fetch('/api/prefetch_media', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ track_id: trackId, items })
+                        });
+                        const data = await resp.json().catch(() => ({}));
+                        if (!resp.ok || !data || data.ok !== true) {
+                            // If prefetch fails, still allow playback via proxy/live URLs
+                            this.prefetchInProgress = false;
+                            this.prefetchedTrackId = trackId;
+                            this.cachedUrlMap = {};
+                            this.prefetchLastMessageAt = Date.now();
+                            this.prefetchFailed = this.prefetchTotal;
+                            return;
+                        }
+
+                        this.cachedUrlMap = data.cached || {};
+                        this.prefetchedTrackId = trackId;
+                        const counts = data.counts || {};
+                        this.prefetchTotal = Number(counts.total_items || items.length);
+                        this.prefetchCached = Number(counts.cached || Object.keys(this.cachedUrlMap).length);
+                        this.prefetchSkipped = Number(counts.skipped || (data.skipped || []).length);
+                        this.prefetchFailed = Number(counts.failed || (data.failed || []).length);
+                        this.prefetchLastMessageAt = Date.now();
+
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:prefetchTrackMedia',message:'prefetch result',data:{trackId,total:this.prefetchTotal,cached:this.prefetchCached,skipped:this.prefetchSkipped,failed:this.prefetchFailed,cachedMapSize:Object.keys(this.cachedUrlMap||{}).length,sampleMappings:Object.entries(this.cachedUrlMap||{}).slice(0,3).map(([k,v])=>({fromHead:String(k).slice(0,60),to:v}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'GIF-H4'})}).catch(()=>{});
+                        // #endregion
+
+                        const rewriteItems = (arr) => {
+                            if (!Array.isArray(arr)) return arr;
+                            return arr.map(it => {
+                                if (!it) return it;
+                                const orig = it._original_url || it.original_url || it.url || '';
+                                const cached = this.cachedUrlMap[orig] || this.cachedUrlMap[it.url] || null;
+                                if (!cached) return it;
+                                return { ...it, url: cached, _original_url: orig };
+                            });
+                        };
+
+                        // Rewrite the current rotation and full pool to cached URLs
+                        this.gifs = rewriteItems(this.gifs);
+                        this.gifPool = rewriteItems(this.gifPool);
+
+                        // Progressive loading: prioritize current + next 2-3 items, lazy load the rest
+                        this.preloadMediaProgressive();
+
+                        this.prefetchInProgress = false;
+                    } catch (e) {
+                        this.prefetchInProgress = false;
+                        this.prefetchLastMessageAt = Date.now();
+                        // Best-effort: don't block visuals
+                    }
+                },
+
+                preloadMediaProgressive() {
+                    // Cleanup old preload video elements
+                    try {
+                        if (Array.isArray(this._preloadVideoEls)) {
+                            this._preloadVideoEls.forEach(v => {
+                                try { v.src = ''; } catch (_) {}
+                            });
+                        }
+                        this._preloadVideoEls = [];
+                        if (Array.isArray(this._nextVideoPreload)) {
+                            this._nextVideoPreload.forEach(v => {
+                                try { v.src = ''; } catch (_) {}
+                            });
+                        }
+                        this._nextVideoPreload = [];
+                    } catch (_) {}
+
+                    const currentIndex = this.currentGifIndex;
+                    const pool = this.gifPool || [];
+                    
+                    // Separate into priority groups
+                    const priorityUrls = []; // Current + next 2-3 items
+                    const lazyUrls = []; // Rest of items
+                    
+                    pool.forEach((it, idx) => {
+                        const u = it?.url || '';
+                        if (!u) return;
+                        
+                        const item = { url: u, mime: (it?.mime || '').toLowerCase() };
+                        
+                        // Priority: current item and next 2-3 items
+                        const distance = Math.abs(idx - currentIndex);
+                        if (distance <= 3) {
+                            priorityUrls.push(item);
+                        } else {
+                            lazyUrls.push(item);
+                        }
+                    });
+
+                    // Dedup
+                    const dedupUrls = (urls) => {
+                        const seen = new Set();
+                        return urls.filter(x => {
+                            if (!x.url || seen.has(x.url)) return false;
+                            seen.add(x.url);
+                            return true;
+                        });
+                    };
+
+                    // Preload priority items immediately with 'auto'
+                    this.preloadUrls(dedupUrls(priorityUrls), 'auto');
+                    
+                    // Lazy load others with 'metadata' after a delay
+                    setTimeout(() => {
+                        this.preloadUrls(dedupUrls(lazyUrls), 'metadata');
+                    }, 1000);
+                },
+
+                preloadUrls(urls, strategy) {
+                    // strategy: 'auto', 'metadata', or 'none'
+                    urls.forEach(x => {
+                        const isVideo = x.mime.startsWith('video/') || x.url.toLowerCase().endsWith('.mp4');
+                        if (isVideo) {
+                            const v = document.createElement('video');
+                            v.muted = true;
+                            v.preload = strategy;
+                            v.src = x.url;
+                            if (strategy === 'auto') {
+                                try { v.load(); } catch (_) {}
+                            }
+                            this._preloadVideoEls.push(v);
+                        } else {
+                            const img = new Image();
+                            // Use native lazy loading for images
+                            img.loading = strategy === 'auto' ? 'eager' : 'lazy';
+                            img.src = x.url;
+                        }
+                    });
+                },
+
+                preloadNextVideo(currentIndex) {
+                    if (!this.gifs || this.gifCount === 0) return;
+                    
+                    const nextIndex = (currentIndex + 1) % this.gifCount;
+                    const nextItem = this.gifs[nextIndex];
+                    if (!nextItem) return;
+                    
+                    const nextUrl = nextItem.url || '';
+                    const nextMime = (nextItem.mime || '').toLowerCase();
+                    const isVideo = nextMime.startsWith('video/') || nextUrl.toLowerCase().endsWith('.mp4');
+                    
+                    if (isVideo && nextUrl) {
+                        // Check if already preloaded
+                        const alreadyPreloaded = this._nextVideoPreload.some(v => v.src === nextUrl);
+                        if (alreadyPreloaded) return;
+                        
+                        const v = document.createElement('video');
+                        v.muted = true;
+                        v.preload = 'auto';
+                        v.src = nextUrl;
+                        try { v.load(); } catch (_) {}
+                        this._nextVideoPreload.push(v);
+                        
+                        // Keep only last 3 preloaded videos
+                        if (this._nextVideoPreload.length > 3) {
+                            const old = this._nextVideoPreload.shift();
+                            try { old.src = ''; } catch (_) {}
+                        }
+                    }
+                },
+
+                getTrackElapsedSeconds() {
+                    // Prefer screenshot-derived playback position (most accurate).
+                    const pos = this.activeDeckData?.playback_position_s;
+                    const posUpdatedAt = this.activeDeckData?.position_updated_at;
+                    if (pos != null && posUpdatedAt != null) {
+                        const base = Number(pos);
+                        const t0 = Number(posUpdatedAt);
+                        if (Number.isFinite(base) && Number.isFinite(t0) && base >= 0) {
+                            const now = Date.now() / 1000;
+                            const elapsed = base + (now - t0);
+                            if (Number.isFinite(elapsed) && elapsed >= 0) return elapsed;
+                        }
+                    }
+
+                    // Fallback: backend-estimated start time.
+                    const startedAt = this.activeDeckData?.track_started_at;
+                    if (!startedAt) return null;
+                    const elapsed = (Date.now() / 1000) - Number(startedAt);
+                    if (!Number.isFinite(elapsed) || elapsed < 0) return null;
+                    return elapsed;
+                },
+
+                getTrackRemainingSeconds() {
+                    // Prefer screenshot-derived remaining time (negative countdown like -03:21).
+                    const rem = this.activeDeckData?.playback_remaining_s;
+                    const updatedAt = this.activeDeckData?.position_updated_at;
+                    if (rem == null || updatedAt == null) return null;
+                    const base = Number(rem);
+                    const t0 = Number(updatedAt);
+                    if (!Number.isFinite(base) || !Number.isFinite(t0) || base < 0) return null;
+                    const now = Date.now() / 1000;
+                    const remaining = base - (now - t0);
+                    if (!Number.isFinite(remaining)) return null;
+                    return Math.max(0, remaining);
+                },
+
+                onMusicVideoLoaded() {
+                    // Indicator player: keep synced, but don't force playback (main visuals handles playback).
+                    const v = this.$refs.musicVideoPlayer;
+                    if (v) this.syncMusicVideoElement(v, true, false);
+                },
+
+                onMusicVideoTimeUpdate() {
+                    // Lightweight: keep it close without fighting playback constantly
+                    const v = this.$refs.musicVideoPlayer;
+                    if (v) this.syncMusicVideoElement(v, false, false);
+                },
+
+                syncMusicVideoElement(video, force = false, ensurePlay = false) {
+                    if (!video || !this.musicVideoUrl) return;
+                    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+
+                    // Prefer end-alignment using remaining time (skips intro when MV is longer than audio).
+                    const remaining = this.getTrackRemainingSeconds();
+                    let target = null;
+                    if (remaining != null) {
+                        const dur = video.duration;
+                        const remMod = ((remaining % dur) + dur) % dur;
+                        target = ((dur - remMod) % dur);
+                    } else {
+                        const elapsed = this.getTrackElapsedSeconds();
+                        if (elapsed == null) return;
+                        target = elapsed % video.duration;
+                    }
+
+                    const drift = Math.abs((video.currentTime || 0) - target);
+                    if (force || drift > 0.35) {
+                        try { video.currentTime = target; } catch (_) {}
+                    }
+
+                    if (ensurePlay && video.paused) {
+                        video.play().catch(() => {});
+                    }
+                },
+
+                syncAllMusicVideos(force = false) {
+                    const mainMv = this.$refs.mainMusicVideoPlayer;
+                    const infoMv = this.$refs.musicVideoPlayer;
+                    if (mainMv && this.showMainMusicVideo) this.syncMusicVideoElement(mainMv, force, true);
+                    if (infoMv) this.syncMusicVideoElement(infoMv, force, false);
+                },
+
+                playMusicVideoClip(clip, index, event) {
+                    // Play the clicked clip
+                    const videoElement = event?.target || document.querySelectorAll('.music-video-clip-player')[index];
+                    if (videoElement) {
+                        if (videoElement.paused) {
+                            videoElement.play();
+                        } else {
+                            videoElement.pause();
+                        }
+                    }
+                },
                 removeGifAt(index) {
                     if (!this.gifs || this.gifs.length === 0) return;
                     if (index < 0 || index >= this.gifs.length) return;
@@ -712,26 +1506,48 @@
                 },
                 async fetchData() {
                     try {
+                        const headers = {
+                            'Accept': 'application/json',
+                        };
+                        // Add If-None-Match for conditional requests
+                        if (this.lastETag) {
+                            headers['If-None-Match'] = this.lastETag;
+                        }
+
                         const response = await fetch('/api/enriched', {
                             method: 'GET',
-                            headers: {
-                                'Accept': 'application/json',
-                            },
+                            headers: headers,
                             // Prevent browser extensions from interfering
                             cache: 'no-cache'
                         });
                         
+                        // If not modified, skip processing
+                        if (response.status === 304) {
+                            this.isConnected = true;
+                            return;
+                        }
+                        
+                        const etag = response.headers.get('ETag');
+                        if (etag) {
+                            this.lastETag = etag;
+                        }
+                        
                         if (response.ok) {
                             const oldTrackId = this.lastTrackId;
                             const data = await response.json();
-                            this.enrichedData = data;
-                            this.isConnected = true;
+                            
+                            // Only update if data actually changed (avoid unnecessary processing)
+                            const dataStr = JSON.stringify(data);
+                            const currentDataStr = JSON.stringify(this.enrichedData);
+                            if (dataStr !== currentDataStr) {
+                                this.enrichedData = data;
+                                this.isConnected = true;
 
-                            // Fetch GIFs based only on deck data (title, artist, key)
-                            await this.fetchGifsForActiveDeck();
-
-                            // Log current state after each successful fetch
-                            this.debugState();
+                                // Fetch GIFs based only on deck data (title, artist, key)
+                                await this.fetchGifsForActiveDeck();
+                            } else {
+                                this.isConnected = true;
+                            }
                         } else {
                             this.isConnected = false;
                         }
@@ -752,18 +1568,33 @@
                 },
                 handleImageError(event) {
                     // Hide broken images
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:handleImageError',message:'image error',data:{trackId:this.lastGifTrackId,currentGifIndex:this.currentGifIndex,currentGifId:this.getGifId(this.currentGif),url:this.currentGif?.url||'',resolvedUrl:this.currentGifUrl||'',isCached:String(this.currentGif?.url||'').startsWith('/api/cache_media/'),hasPool:Array.isArray(this.gifPool),poolSize:(this.gifPool||[]).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'SLOT-H1'})}).catch(()=>{});
+                    // #endregion
+                    this.markGifSlot(this.currentGifIndex, 'fail', 'img_error');
+                    this.replaceCurrentWithDanceFallback('img_error');
                     event.target.style.display = 'none';
                 },
                 getDeckActive(deckName) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:768',message:'getDeckActive entry',data:{deckName,hasEnrichedData:!!this.enrichedData,active_deck:this.enrichedData?.active_deck,hasDeck:!!this.enrichedData?.[deckName],deckActive:this.enrichedData?.[deckName]?.active},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+                    // #endregion
                     // Check if deck is active from djcap_output.json (now contains all data)
                     if (this.enrichedData && this.enrichedData[deckName]) {
                         const deck = this.enrichedData[deckName];
                         if (deck && typeof deck.active === 'boolean') {
+                            // #region agent log
+                            fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:773',message:'getDeckActive returning deck.active',data:{deckName,deckActive:deck.active,result:deck.active},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+                            // #endregion
                             return deck.active;
                         }
                     }
                     // Fallback to active_deck field
-                    return this.enrichedData && this.enrichedData.active_deck === deckName;
+                    const fallbackResult = this.enrichedData && this.enrichedData.active_deck === deckName;
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:777',message:'getDeckActive fallback result',data:{deckName,fallbackResult,active_deck:this.enrichedData?.active_deck},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+                    // #endregion
+                    return fallbackResult;
                 },
                 startGifCycle() {
                     // Clear existing interval
@@ -772,7 +1603,8 @@
                     }
                     
                     // Check if we have GIFs and if track changed
-                    if (!this.activeDeckData || this.gifCount === 0) {
+                    if (this.prefetchInProgress) return;
+                    if (!this.activeDeckData || (this.gifCount === 0 && !this.musicVideoUrl)) {
                         return;
                     }
                     
@@ -781,6 +1613,7 @@
                     if (trackId !== this.lastTrackId) {
                         this.currentGifIndex = 0;
                         this.lastTrackId = trackId;
+                        this.mainVisualMode = (this.gifCount === 0 && this.musicVideoUrl) ? 'mv' : 'clip';
                     }
                     
                     // Only start cycling if we have more than 1 GIF
@@ -798,7 +1631,7 @@
                         // This is a fallback that should rarely trigger since GIFs/videos have their own timeouts
                         this.gifCycleInterval = setInterval(() => {
                             // Only advance if current item is NOT a video (videos advance via their own timeout)
-                            if (!this.currentGifVideoUrl) {
+                            if (this.mainVisualMode !== 'mv' && !this.currentGifVideoUrl) {
                                 this.cycleToNextGif();
                             }
                         }, interval);
@@ -813,6 +1646,11 @@
                     this.currentGifIndex = (this.currentGifIndex + 1) % this.gifCount;
                 },
                 advanceGif() {
+                    const advanceStartTime = performance.now();
+                    const oldIndex = this.currentGifIndex;
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:advanceGif',message:'advance_start',data:{currentGifIndex:this.currentGifIndex,gifCount:this.gifCount,hasActiveDeckData:!!this.activeDeckData},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'})}).catch(()=>{});
+                    // #endregion
                     // Advance to next GIF/video, skipping videos that have already been played
                     if (!this.activeDeckData || this.gifCount === 0) {
                         return;
@@ -856,8 +1694,13 @@
                     }
                     
                     // Apply transition effect (unique for each video)
+                    const self = this;
                     this.applyTransition(() => {
-                        this.currentGifIndex = nextIndex;
+                        self.currentGifIndex = nextIndex;
+                        const advanceEndTime = performance.now();
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:advanceGif',message:'advance_complete',data:{oldIndex:oldIndex,newIndex:nextIndex,advanceDurationMs:advanceEndTime-advanceStartTime,nextUrl:self.currentGifVideoUrl||'',nextIsVideo:!!self.currentGifVideoUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H5'})}).catch(()=>{});
+                        // #endregion
                     }, nextIndex);
                 },
                 getTransitionType(index) {
@@ -1002,6 +1845,7 @@
                     }, transitionDuration);
                 },
                 onGifLoad() {
+                    this.markGifSlot(this.currentGifIndex, 'ok', 'img_load');
                     const bpm = this.activeDeckData?.bpm || 120;
                     // Use same 2-bar duration as videos for consistency
                     // 2 bars = 8 beats (1 bar = 4 beats)
@@ -1012,8 +1856,9 @@
                     const durationMs = durationSeconds * 1000; // Convert to milliseconds
                     const duration = Math.max(250, durationMs); // Minimum 250ms
                     
+                    this.lastClipDurationMs = duration;
                     this.resetGifTimers();
-                    this.gifTimeoutId = setTimeout(() => this.advanceGif(), duration);
+                    this.scheduleAfterClip(duration);
                 },
                 resetGifTimers() {
                     if (this.gifTimeoutId) {
@@ -1024,11 +1869,15 @@
                         clearTimeout(this.videoTimeoutId);
                         this.videoTimeoutId = null;
                     }
+                    if (this.mvTimeoutId) {
+                        clearTimeout(this.mvTimeoutId);
+                        this.mvTimeoutId = null;
+                    }
                     this.activeVideoRef = null;
                 },
                 updateVideoPlaybackRate() {
-                    // Try to get video from event if available, otherwise query DOM
-                    const video = this.activeVideoRef || document.querySelector('video');
+                    // Only update the current GIF/clip video playback rate (not the music video).
+                    const video = this.activeVideoRef;
                     if (!video) return;
                     const bpm = this.activeDeckData?.bpm || 120;
                     const rate = Math.max(0.25, Math.min(4.0, bpm / 120)); // Clamp rate between 0.25x and 4.0x
@@ -1037,6 +1886,10 @@
                 },
                 onVideoLoaded(event) {
                     const video = event.target;
+                    const loadStartTime = performance.now();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onVideoLoaded',message:'video_load_start',data:{currentGifIndex:this.currentGifIndex,url:this.currentGifVideoUrl||'',readyState:video.readyState,networkState:video.networkState,loadStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+                    // #endregion
                     this.activeVideoRef = video; // Store reference for rate updates
                     const bpm = this.activeDeckData?.bpm || 120;
                     const rate = Math.max(0.25, Math.min(4.0, bpm / 120)); // Clamp rate between 0.25x and 4.0x
@@ -1052,27 +1905,222 @@
                     const videoBeats = 2; // 2 beats per video (half a bar)
                     const durationSeconds = (videoBeats / bpm) * 60; // Duration in seconds
                     const clipDurationMs = Math.max(200, Math.min(2000, durationSeconds * 1000)); // Clamp 200ms-2s (max 2 seconds)
+                    this.lastClipDurationMs = clipDurationMs;
                     
-                    // Set timeout to advance after 2 beats
+                    // For 1-second clips, the video will end naturally and trigger onVideoEnded
+                    // Set a fallback timeout only if video doesn't end naturally (with buffer to avoid race condition)
+                    const naturalDuration = (video.duration || 0) * 1000; // Video duration in ms
+                    const timeoutDuration = naturalDuration > 0 ? naturalDuration + 200 : clipDurationMs + 200; // Add 200ms buffer
+                    
                     this.videoTimeoutId = setTimeout(() => {
-                        if (video && !video.paused) {
+                        // Only advance if video hasn't ended naturally (check if still playing/not ended)
+                        if (video && !video.ended && !video.paused) {
                             video.pause();
+                            this.scheduleAfterClip(0);
+                        } else if (video && video.ended) {
+                            // Video already ended, onVideoEnded should have handled it
+                            // Just clear the timeout to prevent double-advance
+                            this.videoTimeoutId = null;
                         }
-                        this.advanceGif();
-                    }, clipDurationMs);
+                    }, timeoutDuration);
                     
                     const videoNaturalDuration = video.duration || 0;
+                    const loadEndTime = performance.now();
+                    const loadDuration = loadEndTime - loadStartTime;
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onVideoLoaded',message:'video_load_complete',data:{currentGifIndex:this.currentGifIndex,url:this.currentGifVideoUrl||'',duration:videoNaturalDuration,loadDurationMs:loadDuration,readyState:video.readyState,bpm,rate:rate.toFixed(2),timeoutDurationMs:timeoutDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+                    // #endregion
                     console.log(`Video loaded: BPM ${bpm}, rate ${rate.toFixed(2)}x, natural duration ${videoNaturalDuration.toFixed(2)}s, clip duration ${durationSeconds.toFixed(2)}s (2 beats)`);
-                    video.play().catch(() => {});
+                    const playStartTime = performance.now();
+                    video.play().then(() => {
+                        const playEndTime = performance.now();
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onVideoLoaded',message:'video_play_started',data:{currentGifIndex:this.currentGifIndex,playStartTime,playEndTime,playDelayMs:playEndTime-playStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+                        // #endregion
+                    }).catch(() => {});
+                    this.markGifSlot(this.currentGifIndex, 'ok', 'video_loaded');
+                },
+                onClipVideoError(event) {
+                    // #region agent log
+                    const video = event?.target;
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onClipVideoError',message:'clip video error',data:{trackId:this.lastGifTrackId,currentGifIndex:this.currentGifIndex,currentGifId:this.getGifId(this.currentGif),url:this.currentGif?.url||'',readyState:video?.readyState,networkState:video?.networkState,errorCode:video?.error?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'SLOT-H1'})}).catch(()=>{});
+                    // #endregion
+                    this.markGifSlot(this.currentGifIndex, 'fail', 'video_error');
+                    this.replaceCurrentWithDanceFallback('video_error');
                 },
                 onVideoEnded() {
-                    // Fallback: if video ends naturally before timeout, advance
-                    // This can happen if video is shorter than 2 bars
+                    const endTime = performance.now();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onVideoEnded',message:'video_ended',data:{currentGifIndex:this.currentGifIndex,url:this.currentGifVideoUrl||'',endTime,hasTimeout:!!this.videoTimeoutId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                    // #endregion
+                    // Video ended naturally - advance immediately
+                    // Clear any pending timeout to avoid double-advance
                     if (this.videoTimeoutId) {
                         clearTimeout(this.videoTimeoutId);
                         this.videoTimeoutId = null;
                     }
-                    this.advanceGif();
+                    const scheduleStartTime = performance.now();
+                    // Immediately advance to next clip
+                    this.scheduleAfterClip(0);
+                    const scheduleEndTime = performance.now();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:onVideoEnded',message:'schedule_after_clip_called',data:{currentGifIndex:this.currentGifIndex,scheduleDurationMs:scheduleEndTime-scheduleStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                    // #endregion
+                },
+
+                shouldInterleaveMusicVideo() {
+                    // Only interleave if a music video exists
+                    return !!this.musicVideoUrl;
+                },
+
+                scheduleAfterClip(delayMs) {
+                    // After a clip finishes (or for images: after duration), switch to MV for same duration, then advance.
+                    const scheduleStartTime = performance.now();
+                    const d = Number(delayMs || 0);
+                    const clipDur = Math.max(200, Number(this.lastClipDurationMs || 1000));
+                    // For 1-second clips, disable music video interleaving to avoid delays
+                    // Only interleave if clip duration is > 1.5 seconds
+                    const shouldInterleave = this.shouldInterleaveMusicVideo() && clipDur > 1500;
+                    const mvDur = shouldInterleave ? Math.max(200, clipDur * Number(this.musicVideoInterleaveMultiplier || 2)) : 0;
+
+                    const doSwitch = () => {
+                        const switchStartTime = performance.now();
+                        if (shouldInterleave) {
+                            // #region agent log
+                            fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:scheduleAfterClip',message:'MV interleave durations',data:{clipDurMs:clipDur,mvDurMs:mvDur,multiplier:this.musicVideoInterleaveMultiplier,trackId:this.lastGifTrackId,hasMusicVideo:!!this.musicVideoUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'MV-DUR'})}).catch(()=>{});
+                            // #endregion
+                            this.showMusicVideoSegment(mvDur);
+                            const switchEndTime = performance.now();
+                            // #region agent log
+                            fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:scheduleAfterClip',message:'showing_mv_segment',data:{mvDurMs:mvDur,switchDurationMs:switchEndTime-switchStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                            // #endregion
+                        } else {
+                            this.mainVisualMode = 'clip';
+                            this.advanceGif();
+                            const switchEndTime = performance.now();
+                            // #region agent log
+                            fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:scheduleAfterClip',message:'advancing_directly',data:{switchDurationMs:switchEndTime-switchStartTime,clipDurMs:clipDur},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                            // #endregion
+                        }
+                    };
+
+                    if (d > 0) {
+                        this.gifTimeoutId = setTimeout(doSwitch, d);
+                    } else {
+                        doSwitch();
+                    }
+                    const scheduleEndTime = performance.now();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:scheduleAfterClip',message:'schedule_complete',data:{delayMs:d,scheduleDurationMs:scheduleEndTime-scheduleStartTime,willShowMV:shouldInterleave,clipDurMs:clipDur},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                    // #endregion
+                },
+
+                showMusicVideoSegment(durationMs) {
+                    // Show MV in main visuals for durationMs, then go to next clip.
+                    const mvShowStartTime = performance.now();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:showMusicVideoSegment',message:'mv_show_start',data:{durationMs,currentGifIndex:this.currentGifIndex},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                    // #endregion
+                    this.resetGifTimers();
+                    this.mainVisualMode = 'mv';
+
+                    this.$nextTick(() => {
+                        const mv = this.$refs.mainMusicVideoPlayer;
+                        if (mv) this.syncMusicVideoElement(mv, true, true);
+                    });
+
+                    const dur = Math.max(200, Number(durationMs || 1000));
+                    this.mvTimeoutId = setTimeout(() => {
+                        const mvEndTime = performance.now();
+                        // #region agent log
+                        fetch('http://127.0.0.1:7243/ingest/de810582-aac9-475e-a550-814de2e0a55c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:showMusicVideoSegment',message:'mv_timeout_fired',data:{durationMs:dur,actualDurationMs:mvEndTime-mvShowStartTime,currentGifIndex:this.currentGifIndex},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                        // #endregion
+                        this.mainVisualMode = 'clip';
+                        this.advanceGif();
+                    }, dur);
+                },
+
+                onMainMusicVideoLoaded() {
+                    const mv = this.$refs.mainMusicVideoPlayer;
+                    if (mv) this.syncMusicVideoElement(mv, true, true);
+                    // Start dance overlay cycle when music video loads (if not already started)
+                    if (this.danceVideosOverlay && this.danceVideosOverlay.length > 0 && !this.danceOverlayInterval) {
+                        this.startDanceOverlayCycle();
+                    }
+                },
+
+                onMainMusicVideoTimeUpdate() {
+                    const mv = this.$refs.mainMusicVideoPlayer;
+                    if (mv) this.syncMusicVideoElement(mv, false, true);
+                },
+                startDanceOverlayCycle() {
+                    // Stop any existing cycle
+                    this.stopDanceOverlayCycle();
+                    
+                    if (!this.musicVideoUrl || !this.danceVideosOverlay || this.danceVideosOverlay.length === 0) {
+                        console.log('Dance overlay cycle not started:', {
+                            hasMusicVideo: !!this.musicVideoUrl,
+                            hasDanceVideos: !!(this.danceVideosOverlay && this.danceVideosOverlay.length > 0),
+                            danceVideosCount: this.danceVideosOverlay?.length || 0
+                        });
+                        return;
+                    }
+                    
+                    console.log('Starting dance overlay cycle with', this.danceVideosOverlay.length, 'videos');
+                    
+                    // Start with overlay visible immediately
+                    this.showDanceOverlay = true;
+                    this.currentDanceOverlayIndex = 0;
+                    
+                    // Change to next video every second (overlay stays visible)
+                    this.danceOverlayInterval = setInterval(() => {
+                        // Advance to next video
+                        this.currentDanceOverlayIndex = (this.currentDanceOverlayIndex + 1) % this.danceVideosOverlay.length;
+                        console.log('Switching to next dance overlay:', this.currentDanceOverlayIndex, this.currentDanceOverlayUrl);
+                        
+                        // Preload the video after this one for smooth transitions
+                        const nextIndex = (this.currentDanceOverlayIndex + 1) % this.danceVideosOverlay.length;
+                        const nextVideo = this.danceVideosOverlay[nextIndex];
+                        if (nextVideo && nextVideo.url) {
+                            const preloadVideo = document.createElement('video');
+                            preloadVideo.src = nextVideo.url;
+                            preloadVideo.preload = 'auto';
+                            preloadVideo.muted = true;
+                            preloadVideo.load();
+                        }
+                    }, 1000); // Switch video every 1 second
+                },
+                stopDanceOverlayCycle() {
+                    if (this.danceOverlayInterval) {
+                        clearInterval(this.danceOverlayInterval);
+                        this.danceOverlayInterval = null;
+                    }
+                    this.showDanceOverlay = false;
+                },
+                onDanceOverlayLoaded(event) {
+                    const video = event.target;
+                    console.log('Dance overlay video loaded:', video.src, 'showDanceOverlay:', this.showDanceOverlay);
+                    if (video) {
+                        video.currentTime = 0;
+                        video.loop = false;
+                        video.muted = true;
+                        // Ensure video is visible if overlay should be shown
+                        if (this.showDanceOverlay) {
+                            video.style.opacity = '1';
+                            video.style.visibility = 'visible';
+                            video.style.display = 'block';
+                            // Play only if overlay is visible
+                            video.play().catch((err) => {
+                                // AbortError is expected when source changes, ignore it
+                                if (err.name !== 'AbortError') {
+                                    console.error('Error playing dance overlay:', err);
+                                }
+                            });
+                        }
+                    }
+                },
+                onDanceOverlayEnded() {
+                    // Dance overlay video ended - it will restart when shown again
                 },
             }
         }).mount('#app');

@@ -64,19 +64,23 @@ def get_dance_videos(count: int = 5, filter_similar: bool = False) -> List[Dict[
         selected = random.sample(videos, select_count)
     
     result = []
-    for video_path in selected:
-        # Create a video dict similar to GIF structure
-        video_dict = {
-            "id": f"dance_{video_path.stem}",
-            "url": f"/api/dance_video/{video_path.name}",
-            "title": f"Dance Video {video_path.stem}",
-            "mime": "video/mp4",
-            "source": "dance_mp4_bank",
-            "width": 480,  # Default, could be enhanced with actual video metadata
-            "height": 270,
-            "tags": ["dance", "offline"]
-        }
-        result.append(video_dict)
+    for i, video_path in enumerate(selected):
+        # Create multiple 1-second clips from each video by varying start time
+        # Each video can provide multiple clips at different start times
+        clips_per_video = 3  # Get 3 different 1-second clips from each video
+        for clip_idx in range(clips_per_video):
+            start_time = clip_idx * 1.0  # Start at 0s, 1s, 2s, etc.
+            video_dict = {
+                "id": f"dance_{video_path.stem}_clip{clip_idx}",
+                "url": f"/api/dance_video/{video_path.name}?start={start_time}",
+                "title": f"Dance Video {video_path.stem} (Clip {clip_idx + 1})",
+                "mime": "video/mp4",
+                "source": "dance_mp4_bank",
+                "width": 480,  # Default, could be enhanced with actual video metadata
+                "height": 270,
+                "tags": ["dance", "offline"]
+            }
+            result.append(video_dict)
     
     # Filter out similar videos if requested
     if filter_similar:

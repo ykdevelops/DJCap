@@ -39,9 +39,19 @@ Thumbs.db
 
 # Project specific - Generated data (should not be committed)
 data/output/
+data/music_videos/
+data/cache/
 djcap_output.json
 djcap_enriched.json
 *.log
+
+# Large media files - should not be committed to GitHub
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.flv
 
 # Debug folder - Contains test images and scripts
 debug/

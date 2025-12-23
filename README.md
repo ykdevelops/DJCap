@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue)](https://github.com/ykdevelops/AudioGiphy)
 
-AudioGiphy is a real-time DJ metadata capture and visualization system that continuously monitors the djay Pro application window, extracts track metadata (Deck #, Song Title, Artist Name, BPM, Key) using Apple Vision OCR, enriches it with Last.fm tags and Giphy GIFs, and provides a live web-based visualization interface.
+AudioGiphy is a real-time DJ metadata capture and visualization system that continuously monitors the djay Pro application window, extracts track metadata (Deck #, Song Title, Artist Name, BPM, Key) using Apple Vision OCR, enriches it with Last.fm tags, downloads music videos from YouTube, and provides a live web-based visualization interface with music videos overlaid with dance videos.
 
 ## Features
 
@@ -10,24 +10,27 @@ AudioGiphy is a real-time DJ metadata capture and visualization system that cont
 - **Apple Vision OCR**: Uses native macOS OCR (via `ocrmac`) for accurate text extraction
 - **Continuous monitoring**: Updates JSON file every few seconds with real-time track metadata
 - **Metadata enrichment**: Automatically enriches tracks with Last.fm tags, keywords, and musical key characteristics
-- **GIF integration**: Fetches and manages Giphy GIFs based on artist metadata
-- **Dance video bank**: Integrates offline dance video library for visual variety
-- **Interleaved media rotation**: 15-item rotation (5 Giphy GIFs + 5 Google GIFs + 5 videos, or 10 Giphy GIFs + 5 videos if Google API unavailable)
+- **Music video integration**: Automatically downloads and plays music videos from YouTube using `yt-dlp`
+- **Dance video overlay**: Overlays dance videos from the offline bank on top of music videos, switching every second
+- **Proactive downloading**: Proactively downloads music videos for upcoming tracks in inactive decks
+- **1-second video clips**: Both music and dance videos are served as 1-second clips with smooth fade in/out effects
 - **BPM-synced video playback**: Videos automatically adjust playback rate to match track BPM
-- **Fixed video duration**: Videos play for exactly 1 second with smooth directional slide transitions
-- **Unique video transitions**: Each video uses a unique directional slide transition (up → left → down → right, cycling)
+- **Cookie-based authentication**: Uses browser cookies with `yt-dlp` to bypass YouTube bot detection
+- **Dance video bank**: Integrates offline dance video library (`data/dance_mp4_bank/`) for visual variety
 - **Rate limiting**: Smart rate limiting for Giphy API to stay within limits
-- **Fallback logic**: Automatically uses videos to fill rotation when GIFs are unavailable (rate limited or API issues)
-- **Live web visualization**: Vue.js frontend for real-time visualization of tracks, GIFs, and videos
+- **Live web visualization**: Vue.js frontend for real-time visualization of tracks, music videos, and dance overlays
 - **Auto-cleanup**: Automatic output folder cleanup to manage file sizes
 - **File watching friendly**: JSON file is written atomically for safe file watching
 - **Server management**: Convenient scripts to start/stop/restart all services
+- **Organized repository**: Scripts organized into `scripts/debug/`, `scripts/analysis/`, and `scripts/utils/` folders
 
 ## Requirements
 
 - macOS (uses Apple Vision and Core Graphics APIs)
 - Python 3.8+
 - djay Pro application running
+- `yt-dlp` for music video downloads: `pip install yt-dlp`
+- `ffmpeg` for video processing (install via Homebrew: `brew install ffmpeg`)
 
 ## Installation
 
@@ -36,9 +39,15 @@ AudioGiphy is a real-time DJ metadata capture and visualization system that cont
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
+pip install yt-dlp  # For music video downloads
 ```
 
-3. Grant accessibility permissions (required for window detection):
+3. Install ffmpeg (required for video processing):
+```bash
+brew install ffmpeg
+```
+
+4. Grant accessibility permissions (required for window detection):
    - Go to System Settings > Privacy & Security > Accessibility
    - Add Terminal (or your terminal app) and enable it
    - This allows the script to detect the djay Pro window
@@ -63,22 +72,38 @@ AudioGiphy/
 │   ├── server.py          # Frontend web server
 │   ├── index.html         # Main visualization page
 │   └── viewer.html        # Alternative viewer
-├── debug/                  # Debug scripts and test images
+├── scripts/                # Utility scripts (organized by purpose)
+│   ├── debug/             # Debug scripts and test images
+│   │   ├── debug_green_color.py
+│   │   ├── debug_play_button.py
+│   │   └── [other debug scripts]
+│   ├── analysis/          # Analysis scripts
+│   │   ├── analyze_video_repetitions.py
+│   │   └── analyze_video_similarities.py
+│   └── utils/             # Utility scripts
+│       ├── cleanup.py      # Cleanup script (Python)
+│       ├── cleanup.sh      # Cleanup script (Bash)
+│       ├── start_servers.sh    # Start all services
+│       ├── stop_servers.sh     # Stop all services
+│       └── restart_servers.sh  # Restart all services
 ├── data/                   # Data files
 │   ├── region_coordinates.json  # OCR region coordinates
 │   ├── gif_bank/          # GIF bank storage
 │   ├── dance_mp4_bank/    # Dance video bank (MP4 files)
+│   ├── music_videos/      # Downloaded music videos (MP4 files)
 │   └── output/            # Output JSON files
 │       ├── djcap_output.json
 │       ├── giphy_history.json
 │       └── giphy_rate_state.json
 ├── djcap.py               # Main capture service
 ├── djcap_processor.py     # Metadata enrichment service
-├── start_servers.sh       # Start all services script
-├── stop_servers.sh        # Stop all services script
-├── restart_servers.sh     # Restart all services script
 └── requirements.txt       # Python dependencies
 ```
+
+**Note:** Scripts are organized into `scripts/` subdirectories:
+- `scripts/debug/` - Debug and testing scripts
+- `scripts/analysis/` - Video analysis and processing scripts
+- `scripts/utils/` - Utility scripts (cleanup, server management)
 
 ## Usage
 
@@ -88,13 +113,13 @@ Use the convenience scripts to manage all services:
 
 ```bash
 # Start all services (djcap, processor, frontend)
-./start_servers.sh
+./scripts/utils/start_servers.sh
 
 # Stop all services
-./stop_servers.sh
+./scripts/utils/stop_servers.sh
 
 # Restart all services
-./restart_servers.sh
+./scripts/utils/restart_servers.sh
 ```
 
 ### Manual Start
@@ -155,7 +180,9 @@ The metadata processor service watches `djcap_output.json` for changes and enric
 
 - **Last.fm tags**: Fetches genre, mood, and context tags for tracks
 - **Keyword analysis**: Analyzes and selects the best keywords from metadata and tags
-- **GIF search**: Fetches a safe, rate-limited set of GIFs for live visuals
+- **Music video downloads**: Automatically downloads music videos from YouTube using `yt-dlp` with cookie-based authentication
+- **Dance video overlay**: Fetches 60 dance video clips from the offline bank for overlay on music videos
+- **Proactive downloading**: Downloads music videos for upcoming tracks in inactive decks before they become active
 
 ### Setup
 
@@ -202,25 +229,29 @@ The processor will:
 - Write enriched data directly back to `data/output/djcap_output.json`
 - Inactive decks keep only basic metadata (title, artist, BPM, key, active)
 
-### Media Rotation (GIFs + Videos)
+### Music Video & Dance Overlay System
 
-- **Rotation size**: 15 items per track total
-  - **If Google API available**: 5 Giphy GIFs + 5 Google GIFs + 5 videos = 15 items
-  - **If Google API unavailable**: 10 Giphy GIFs + 5 videos = 15 items
-  - **If GIFs unavailable (rate limited)**: Uses up to 15 videos to maintain 15-item rotation
-- **GIF sources**:
-  - **Giphy**: Fetched from Giphy API based on artist name (primary source)
-  - **Google**: Fetched from Google Custom Search API (secondary source, requires API key and CSE ID)
-- **Videos**: Randomly selected from offline dance video bank (`data/dance_mp4_bank/`)
-- **Interleaving**: 
-  - With Google: Pattern is [Giphy GIF, video, Google GIF, Giphy GIF, video, Google GIF, ...]
-  - Without Google: Pattern alternates [Giphy GIF, video, Giphy GIF, video, ...]
-- **Video duration**: Fixed at 1 second per video clip
-- **BPM sync**: Videos automatically adjust playback rate to match track BPM (rate = BPM / 120)
-- **Video transitions**: Each video uses a unique directional slide transition:
-  - Cycles through: slide-up → slide-left → slide-down → slide-right → (repeats)
-  - Transitions are 150ms for smooth, rhythmic alignment
-- **GIF transitions**: GIFs use fade transitions (150ms)
+- **Music Video Downloads**:
+  - Automatically downloads music videos from YouTube using `yt-dlp`
+  - Uses browser cookies for authentication to bypass bot detection
+  - Videos are processed into 1-second clips with fade in/out effects
+  - Stored in `data/music_videos/` directory
+  - Proactively downloads videos for upcoming tracks in inactive decks
+
+- **Dance Video Overlay**:
+  - 60 dance video clips are fetched from `data/dance_mp4_bank/` for each track
+  - Each dance video generates 3 unique 1-second clips (at 0s, 1s, 2s) with fade effects
+  - Overlay appears on top of music video with higher z-index (z-index: 10)
+  - Switches to a new dance video every second while music video plays continuously
+  - Overlay stays visible and cycles through videos automatically
+
+- **Video Processing**:
+  - All videos (music and dance) are served as 1-second clips on-the-fly
+  - Fade in/out effects applied using `ffmpeg` filters
+  - Minimum bitrate and keyframe intervals ensure valid MP4 files
+  - Videos are streamed directly from the server without pre-generating files
+
+- **BPM Sync**: Music videos automatically adjust playback rate to match track BPM (rate = BPM / 120)
 
 ### GIF behavior (safe defaults)
 
@@ -259,7 +290,11 @@ The JSON file (`data/output/djcap_output.json`) contains:
     "giphy_query": "Artist Name",
     "giphy_query_parts": ["Artist Name"],
     "gifs": [...],
-    "gif_pool": [...]
+    "gif_pool": [...],
+    "dance_videos_overlay": [...],  # 60 dance video clips for overlay
+    "music_video": "/api/music_video/Artist - Title.mp4",  # Music video URL
+    "music_video_status": "ready",  # Status: "ready", "downloading", "error", or "empty"
+    "music_video_clips": [...]  # 1-second clips with fade effects
   },
   "deck2": {
     "deck": "deck2",
@@ -310,6 +345,18 @@ Edit `djcap_processor.py` to change:
 - Install ocrmac: `pip install ocrmac`
 - Ensure you're on macOS (ocrmac requires macOS)
 
+### Music video not downloading
+- Ensure `yt-dlp` is installed: `pip install yt-dlp`
+- Ensure `ffmpeg` is installed: `brew install ffmpeg`
+- Check backend logs for `yt-dlp` errors (may need browser cookies for authentication)
+- Music videos are downloaded proactively for inactive decks, so they may take time to appear
+
+### Dance overlay not visible
+- Ensure both music video and dance videos are available (check console logs)
+- Verify z-index is set correctly (dance overlay should have z-index: 10)
+- Check browser console for any CSS or JavaScript errors
+- Hard refresh browser (Cmd+Shift+R) to clear cached JavaScript
+
 ### Active deck not detected / decks appear inactive
 - The play-button detector looks for the neon green outline around each deck play button. If your resolution/layout changes, recalibrate with `tools/define_play_buttons.py` to update `data/region_coordinates.json` (`deck1_play_button` / `deck2_play_button`).
 - After recalibration, restart `djcap.py` (and the frontend if running) so the new coordinates are picked up.
@@ -317,10 +364,12 @@ Edit `djcap_processor.py` to change:
 
 ### Frontend API notes
 - The frontend server exposes:
-  - **`GET /api/enriched`** - Serves `data/output/djcap_output.json`
-  - **`GET /api/dance_video/{filename}`** - Serves MP4 files from `data/dance_mp4_bank/`
+  - **`GET /api/enriched`** - Serves `data/output/djcap_output.json` with ETag support for conditional requests
+  - **`GET /api/dance_video/{filename}?start={seconds}`** - Serves 1-second MP4 clips from `data/dance_mp4_bank/` with fade effects (on-the-fly processing)
+  - **`GET /api/music_video/{filename}`** - Serves music video files from `data/music_videos/`
   - Static HTML files (index.html, viewer.html)
 - UI assets are served with **no-cache** headers to make local development updates show immediately.
+- Dance videos are processed on-the-fly using `ffmpeg` to extract 1-second segments with fade in/out effects
 
 ### Poor OCR accuracy
 - Ensure djay Pro window is visible (not minimized)
@@ -335,16 +384,16 @@ The project generates various temporary files (debug images, output JSONs, etc.)
 
 **Using Python (recommended):**
 ```bash
-python cleanup.py
+python scripts/utils/cleanup.py
 ```
 
 **Using Bash:**
 ```bash
-./cleanup.sh
+./scripts/utils/cleanup.sh
 ```
 
 This will remove:
-- All PNG/JPG images from `debug/` folder
+- All PNG/JPG images from `scripts/debug/` folder
 - Temporary files (`.tmp`, `.bak`, `.swp`, `*~`)
 - Python cache files (`__pycache__/`, `*.pyc`, `*.pyo`)
 - Any images in the root directory
@@ -357,7 +406,7 @@ This will remove:
 
 The following are automatically ignored by Git:
 - All image files (`.png`, `.jpg`, `.jpeg`, etc.)
-- `debug/` folder (contains test images and debug scripts)
+- `scripts/debug/` folder (contains test images and debug scripts)
 - `data/output/` folder (contains generated JSON files)
 - Temporary files and Python cache
 
@@ -388,15 +437,13 @@ The frontend will:
 - **Real-time Updates**: Automatically polls for new data every 2 seconds
 - **Track Information**: Shows title, artist, BPM, and key
 - **Tags & Keywords**: Displays Last.fm tags and refined keywords
-- **Search Query Preview**: Shows Giphy and Google search queries being used
-- **Media Visuals**: Cycles through 15 items (GIFs + videos) for the current track
-- **BPM-synced Playback**: Videos automatically adjust playback speed to match track BPM
-- **Video Transitions**: Each video uses unique directional slide transitions (up, left, down, right) cycling through the rotation
-- **Video Duration**: Fixed 1-second clips for consistent rhythm
-- **GIF Transitions**: Smooth fade transitions (150ms)
-- **Replace Media**: Click a numbered slot under the visuals to remove that item from rotation; it is replaced immediately from `gif_pool` (no extra API calls)
-- **Video Support**: Automatically detects and plays MP4 videos from the dance video bank
-- **No Video Repeats**: Videos won't repeat within the same track rotation
+- **Music Video Display**: Shows downloaded music videos as the base layer
+- **Dance Video Overlay**: Overlays dance videos on top of music videos, switching every second
+- **BPM-synced Playback**: Music videos automatically adjust playback speed to match track BPM
+- **Video Duration**: Fixed 1-second clips for dance overlays with smooth fade transitions
+- **Continuous Playback**: Music video plays continuously while dance overlay cycles through videos
+- **Z-index Management**: Dance overlay uses z-index: 10 to ensure it appears above music video
+- **Auto-start**: Overlay automatically starts when both music video and dance videos are available
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## License

@@ -20,3 +20,7 @@ watchdog>=3.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 
+# Video downloading and processing
+yt-dlp>=2023.12.30
+ffmpeg-python>=0.2.0
+
